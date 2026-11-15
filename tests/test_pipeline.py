@@ -18,8 +18,12 @@ BODY = {
 }
 
 
+MAPPING = {"Ready for dev": "ready_for_dev", "Dev in progress": "in_dev"}
+
+
 def make(tmp_path, clock=lambda: 0.0, search=lambda: []):
-    return Pipeline(tmp_path / "wf.sqlite", fetch_changelog=lambda k: BODY, search_keys=search, clock=clock)
+    return Pipeline(tmp_path / "wf.sqlite", fetch_changelog=lambda k: BODY, search_keys=search, clock=clock,
+                    status_to_stage=lambda: MAPPING)
 
 
 def test_webhook_routes_each_change_once(tmp_path):

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 from wf.events import ChangeStore, Intake, poll_due
 from wf.orchestrator import Decision, Dispatch, LifecycleStore, Supervisor, no_agents_wired
@@ -23,11 +23,12 @@ class Pipeline:
         search_keys: Callable[[], list[str]],
         dispatch: Dispatch = no_agents_wired,
         clock: Callable[[], float] = time.time,
+        status_to_stage: Callable[[], Mapping[str, str]] | None = None,
     ):
         self.changes = ChangeStore(Path(db_path), clock=clock)
         self.intake = Intake(self.changes, fetch_changelog)
         self.lifecycle = LifecycleStore(Path(db_path), clock=clock)
-        self.supervisor = Supervisor(self.lifecycle, dispatch)
+        self.supervisor = Supervisor(self.lifecycle, dispatch, status_to_stage=status_to_stage)
         self._search = search_keys
         self._clock = clock
 

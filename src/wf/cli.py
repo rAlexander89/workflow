@@ -97,12 +97,91 @@ def cmd_usage(args) -> int:
     return 0
 
 
+def _db_path(args) -> Path:
+    import os
+
+    return Path(args.db or os.environ.get("WF_DB", "wf.sqlite"))
+
+
 def cmd_route(args) -> int:
     from wf import orchestrator
 
     labels = {"hotfix"} if args.hotfix else set()
-    d = orchestrator.route(args.status, labels)
+    mapping = orchestrator.board_status_to_stage(_db_path(args))
+    d = orchestrator.route(args.status, labels, mapping)
     print(f"action: {d.action}\nowner:  {d.owner or '-'}\nwhy:    {d.reason}")
+    return 0
+
+
+def cmd_sync(args) -> int:
+    from wf import board
+
+    conn = board.connect(_db_path(args))
+    try:
+        result = board.sync_file(conn, Path(args.from_file))
+    except board.BoardError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    finally:
+        conn.close()
+    summary = ", ".join(f"{k}={v}" for k, v in sorted(result.counts.items()))
+    print(f"synced: {summary or 'nothing to change'}")
+    for problem in result.problems:
+        print(f"warning: {problem}", file=sys.stderr)
+    return 0
+
+
+def cmd_board(args) -> int:
+    from wf import board
+
+    conn = board.connect(_db_path(args))
+    try:
+        rows = board.active_board(conn)
+        if not rows:
+            print("no tickets in the active sprint (run `wf sync` first)")
+        current = None
+        for r in rows:
+            stage = r["stage"] or "(unmapped)"
+            if stage != current:
+                print(f"\n{stage}")
+                current = stage
+            print(f"  {r['key']:<12} {r['jira_status']:<20} {r['summary']}")
+        for b in board.unmapped_stages(conn):
+            print(f"blocked: {b['project_key']} stage {b['stage']!r}: {b['reason']}", file=sys.stderr)
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_backlog(args) -> int:
+    from wf import board
+
+    conn = board.connect(_db_path(args))
+    try:
+        rows = board.backlog(conn)
+        if not rows:
+            print("the backlog is empty (run `wf sync` with a backlog payload first)")
+        current = None
+        for r in rows:
+            stage = r["stage"] or "(unmapped)"
+            if stage != current:
+                print(f"\n{stage}")
+                current = stage
+            print(f"  {r['key']:<12} {r['jira_status']:<20} {r['summary']}")
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_sprints(args) -> int:
+    from wf import board
+
+    conn = board.connect(_db_path(args))
+    try:
+        for s in board.sprints(conn, args.state):
+            print(f"{s['state']:<7} {s['id']:<8} {s['name']}")
+    finally:
+        conn.close()
     return 0
 
 
@@ -297,7 +376,26 @@ def build_parser() -> argparse.ArgumentParser:
     rt = sub.add_parser("route", help="show which agent owns a ticket status")
     rt.add_argument("status")
     rt.add_argument("--hotfix", action="store_true", help="treat the ticket as carrying the hotfix label")
+    rt.add_argument("--db", default=None, help="SQLite file (default: $WF_DB or ./wf.sqlite)")
     rt.set_defaults(func=cmd_route)
+
+    sy = sub.add_parser("sync", help="apply a sync payload from the Claude session (see docs/sync-format.md)")
+    sy.add_argument("from_file", metavar="FILE", help="JSON payload")
+    sy.add_argument("--db", default=None, help="SQLite file (default: $WF_DB or ./wf.sqlite)")
+    sy.set_defaults(func=cmd_sync)
+
+    bd = sub.add_parser("board", help="show the active sprint, grouped by stage")
+    bd.add_argument("--db", default=None, help="SQLite file (default: $WF_DB or ./wf.sqlite)")
+    bd.set_defaults(func=cmd_board)
+
+    bl = sub.add_parser("backlog", help="show the backlog (tickets in no sprint), grouped by stage")
+    bl.add_argument("--db", default=None, help="SQLite file (default: $WF_DB or ./wf.sqlite)")
+    bl.set_defaults(func=cmd_backlog)
+
+    sp = sub.add_parser("sprints", help="list sprints")
+    sp.add_argument("--state", choices=["future", "active", "closed"], default=None)
+    sp.add_argument("--db", default=None, help="SQLite file (default: $WF_DB or ./wf.sqlite)")
+    sp.set_defaults(func=cmd_sprints)
 
     kl = sub.add_parser("kill", help="kill switch: stop all agent dispatch")
     kl.add_argument("state", choices=["on", "off", "status"])

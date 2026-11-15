@@ -136,12 +136,14 @@ The container runner and the Linux runtime are not built yet.
 
 ## 10. Build order
 
-1. Discovery snapshot from the session, stored in SQLite.
-2. Automatic status mapping, with unmapped stages blocked.
-3. The boot check for the Atlassian MCP.
-4. Remove project-specific code and docs (in progress).
-5. The sprint board: sync, list, and stage moves.
-6. Gateway tools for agents, then the run loop.
+1. Done: the board schema in SQLite, and the sync payload from the session (`docs/sync-format.md`).
+2. Done: automatic status mapping (`src/wf/mapping.py`). Unmapped stages are blocked, and
+   routing uses the mapping in place of the old fixed status table.
+3. Not yet: the boot check for the Atlassian MCP. `wf doctor` does not check it.
+4. Done: remove project-specific code and docs.
+5. Done: the sprint board. `wf sync`, `wf board`, and `wf sprints` work against the payload.
+   Stage moves by agents are not built yet.
+6. Not yet: gateway tools for agents, then the run loop.
 
 ## 11. Open items
 

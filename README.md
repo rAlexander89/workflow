@@ -43,7 +43,15 @@ wf list                            # show linked repos and boards
 wf check                           # verify each link resolves
 wf doctor                          # check this machine for the Claude Code flow
 wf model status                    # show the model provider and access
+wf sync payload.json               # apply a sprint payload from the Claude session
+wf board                           # the active sprint, grouped by stage
+wf backlog                         # your backlog (tickets in no sprint), grouped by stage
+wf sprints --state active          # list sprints
+wf route "Ready for dev"           # which owner a Jira status routes to
 ```
+
+`wf sync` takes the JSON payload that the Claude session builds from the Atlassian MCP.
+See `docs/sync-format.md`.
 
 ## Configuration
 
