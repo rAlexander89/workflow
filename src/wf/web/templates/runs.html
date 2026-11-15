@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Runs{% endblock %}
+{% block content %}
+<h1>Runs</h1>
+
+<form method="post" action="/runs" style="display:block">
+  <textarea name="request" placeholder="Describe the work to start" required></textarea>
+  <button class="primary" style="margin-top:8px">Start run</button>
+</form>
+
+<div x-data="{ filter: 'all' }">
+  <div class="filters">
+    <button type="button" @click="filter = 'all'" :class="{ on: filter === 'all' }">All</button>
+    <button type="button" @click="filter = 'waiting_for_approval'" :class="{ on: filter === 'waiting_for_approval' }">Waiting for approval</button>
+    <button type="button" @click="filter = 'done'" :class="{ on: filter === 'done' }">Done</button>
+  </div>
+  <ul>
+    {% for r in runs %}
+    <li x-show="filter === 'all' || filter === '{{ r.status }}'" x-cloak>
+      <a href="/runs/{{ r.id }}">{{ r.request }}</a>
+      <span class="muted">{{ r.status }}</span>
+    </li>
+    {% else %}
+    <li class="muted">No runs yet.</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endblock %}

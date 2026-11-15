@@ -1,0 +1,11 @@
+<ul>
+  {% for r in rows %}
+  <li>
+    <span class="{{ 'ok' if r.ok else 'error' }}">{{ 'OK' if r.ok else 'FAIL' }}</span>
+    <span>{{ r.kind }} {{ r.name }}</span>
+    <span class="muted">{{ r.detail }}</span>
+  </li>
+  {% else %}
+  <li class="muted">Nothing linked to check.</li>
+  {% endfor %}
+</ul>

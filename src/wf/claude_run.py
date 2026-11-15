@@ -1,0 +1,158 @@
+"""One agent run through Claude Code: `claude -p` started in a ticket's worktree.
+
+The harness creates the worktree and the run directory first. This module builds the
+command, writes the gateway's MCP config, starts the process with a time limit, and
+saves the streamed output. It refuses to run unless `claude_code_access` is enabled.
+
+Profiles set what the run may do. Built-in tools are limited to the worktree's file
+tools. Shell access is left out, so tests run through a gateway tool that executes
+them in the run container. The gateway tool names are placeholders until the gateway
+server exists, and they must match its server name.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+from wf.model import ProviderNotAllowed
+from wf.model.claude_code import CLAUDE_BIN, subscription_env
+
+GATEWAY_SERVER = "gateway"
+
+PROFILES: dict[str, dict[str, list[str]]] = {
+    "dev": {
+        "builtin_tools": ["Read", "Edit", "Write"],
+        "allowed_tools": [
+            "Read", "Edit", "Write",
+            f"mcp__{GATEWAY_SERVER}__get_ticket",
+            f"mcp__{GATEWAY_SERVER}__run_tests",
+            f"mcp__{GATEWAY_SERVER}__push_commit",
+            f"mcp__{GATEWAY_SERVER}__open_pr",
+        ],
+    },
+}
+
+# (argv, cwd, timeout seconds) -> CompletedProcess. Injected so tests run offline.
+Runner = Callable[[list[str], Path, float], "subprocess.CompletedProcess[str]"]
+
+
+@dataclass(frozen=True)
+class RunResult:
+    exit_code: int | None  # None when the run was stopped for time
+    timed_out: bool
+    output_path: Path  # stream-json events, one per line
+    final: dict | None  # the last "result" event, if the run produced one
+
+
+def default_runner(argv: list[str], cwd: Path, timeout: float) -> "subprocess.CompletedProcess[str]":
+    return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False,
+                          env=subscription_env())
+
+
+def build_argv(
+    *,
+    claude_bin: str,
+    prompt: str,
+    system_prompt: str,
+    model: str,
+    mcp_config: Path,
+    builtin_tools: list[str],
+    allowed_tools: list[str],
+    add_dir: Path,
+) -> list[str]:
+    return [
+        claude_bin, "-p", prompt,
+        "--model", model,
+        "--append-system-prompt", system_prompt,
+        "--output-format", "stream-json", "--verbose",
+        "--mcp-config", str(mcp_config), "--strict-mcp-config",
+        "--tools", *builtin_tools,
+        "--allowedTools", *allowed_tools,
+        "--add-dir", str(add_dir),
+        "--permission-mode", "default",
+        "--no-session-persistence",
+    ]
+
+
+def write_mcp_config(run_dir: Path, gateway_command: list[str]) -> Path:
+    """Write the MCP config that connects the run to the gateway only. Readable by the owner alone."""
+    if not gateway_command:
+        raise ValueError("gateway command is empty")
+    config = {"mcpServers": {GATEWAY_SERVER: {"command": gateway_command[0], "args": gateway_command[1:]}}}
+    path = run_dir / "gateway.json"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps(config, indent=2) + "\n")
+    return path
+
+
+def _final_event(stdout: str) -> dict | None:
+    final = None
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "result":
+            final = event
+    return final
+
+
+def run(
+    *,
+    worktree: Path,
+    prompt: str,
+    system_prompt: str,
+    model: str,
+    run_dir: Path,
+    profile: str,
+    gateway_command: list[str],
+    access: bool,
+    timeout: float = 3600.0,
+    claude_bin: str | None = None,
+    runner: Runner | None = None,
+) -> RunResult:
+    if not access:
+        raise ProviderNotAllowed(
+            "Claude Code runs are not enabled on this machine; set claude_code_access in the model config"
+        )
+    if profile not in PROFILES:
+        raise ValueError(f"unknown profile {profile!r}; choose one of {sorted(PROFILES)}")
+    if not worktree.is_dir() or not (worktree / ".git").exists():
+        raise ValueError(f"{worktree} is not a git worktree")
+    if not claude_bin:
+        raise ProviderNotAllowed("the claude CLI is not on PATH")
+
+    run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    mcp_config = write_mcp_config(run_dir, gateway_command)
+    spec = PROFILES[profile]
+    argv = build_argv(
+        claude_bin=claude_bin,
+        prompt=prompt,
+        system_prompt=system_prompt,
+        model=model,
+        mcp_config=mcp_config,
+        builtin_tools=spec["builtin_tools"],
+        allowed_tools=spec["allowed_tools"],
+        add_dir=worktree,
+    )
+
+    output_path = run_dir / "output.jsonl"
+    run_fn = runner or default_runner
+    try:
+        proc = run_fn(argv, worktree, timeout)
+        stdout, stderr, code, timed_out = proc.stdout or "", proc.stderr or "", proc.returncode, False
+    except subprocess.TimeoutExpired as e:
+        stdout = (e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        stderr = (e.stderr or b"").decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+        code, timed_out = None, True
+
+    output_path.write_text(stdout)
+    (run_dir / "stderr.log").write_text(stderr[-8000:])
+    return RunResult(exit_code=code, timed_out=timed_out, output_path=output_path,
+                     final=_final_event(stdout))

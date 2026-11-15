@@ -1,0 +1,14 @@
+<div id="run-status">
+  <p>Status: <strong>{{ snap.status }}</strong></p>
+  <h2>Steps</h2>
+  <ol>
+    {% for s in snap.steps %}<li>{{ s }}</li>{% else %}<li class="muted">No steps yet.</li>{% endfor %}
+  </ol>
+  {% if snap.status == "waiting_for_approval" %}
+  <form hx-post="/runs/{{ run.id }}/decision" hx-target="#run-status" hx-swap="outerHTML">
+    <p>Approve development work for this request?</p>
+    <button class="primary" name="approved" value="yes">Approve</button>
+    <button class="danger" name="approved" value="no">Reject</button>
+  </form>
+  {% endif %}
+</div>

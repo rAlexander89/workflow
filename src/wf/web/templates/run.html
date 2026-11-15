@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Run{% endblock %}
+{% block content %}
+<h1>{{ run.request }}</h1>
+<p class="muted">Run {{ run.id }}</p>
+{% include "_run_status.html" %}
+<p><a href="/runs">← All runs</a></p>
+{% endblock %}

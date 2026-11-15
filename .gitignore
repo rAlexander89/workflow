@@ -1,0 +1,7 @@
+workflow.json
+runs.sqlite*
+wf.sqlite*
+.pytest_cache/
+.venv/
+__pycache__/
+*.egg-info/

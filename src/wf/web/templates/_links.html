@@ -1,0 +1,30 @@
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<h2>Repos</h2>
+<ul>
+  {% for r in repos %}
+  <li>
+    <span>{{ r.name }} <span class="muted">{{ r.path }}</span></span>
+    <form hx-post="/links/repo/remove" hx-target="#links" hx-swap="innerHTML" hx-confirm="Unlink {{ r.name }}?">
+      <input type="hidden" name="name" value="{{ r.name }}">
+      <button class="danger">Remove</button>
+    </form>
+  </li>
+  {% else %}
+  <li class="muted">No repos linked yet.</li>
+  {% endfor %}
+</ul>
+<h2>Boards</h2>
+<ul>
+  {% for b in boards %}
+  <li>
+    <span>{{ b.provider }} · {{ b.ref }}{% if b.label %} <span class="muted">({{ b.label }})</span>{% endif %}</span>
+    <form hx-post="/links/board/remove" hx-target="#links" hx-swap="innerHTML" hx-confirm="Unlink this board?">
+      <input type="hidden" name="provider" value="{{ b.provider }}">
+      <input type="hidden" name="ref" value="{{ b.ref }}">
+      <button class="danger">Remove</button>
+    </form>
+  </li>
+  {% else %}
+  <li class="muted">No boards linked yet.</li>
+  {% endfor %}
+</ul>
