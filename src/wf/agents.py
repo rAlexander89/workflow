@@ -39,7 +39,6 @@ STAGE_ROLE: dict[str, str] = {
     "merged": None,  # the harness moves it on to regression
     "regression": "qa",
     "performance": "performance",
-    "ready_for_prod": None,  # waits for a person to deploy; nothing runs here
 }
 
 SCHEMA = """
@@ -202,41 +201,67 @@ def runs_at(conn: sqlite3.Connection, key: str, stage: str) -> int:
     return streak
 
 
-def advance_pipeline(conn: sqlite3.Connection, *, repo: Path) -> list[str]:
+def prod_ready(conn: sqlite3.Connection, key: str, repo: Path) -> bool:
+    """Regression passed on the current commit (and performance, if the dev asked for it).
+
+    Only then does the Deploy to prod button appear. Approvals count only after the ticket
+    entered the stage they belong to.
+    """
+    proc = subprocess.run(["git", "rev-parse", "--verify", "--quiet", branch_for(key)], cwd=repo,
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        return False
+    head = proc.stdout.strip()
+    if "qa" not in board.approvals_since_stage(conn, key, head, "regression"):
+        return False
+    if board.perf_requested(conn, key):
+        return "performance" in board.approvals_since_stage(conn, key, head, "performance")
+    return True
+
+
+def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, pr_merged=None) -> list[str]:
     """Move tickets along the steps that need no agent judgement. Returns the keys moved.
 
     - an approval at the branch head is the review, so the ticket goes on to QA
-    - a merged ticket goes on to regression
-    - a regression pass (QA approved at head) goes to performance if the dev asked for a check,
-      otherwise straight to ready for prod
-    - a performance pass (performance approved at head) goes to ready for prod
+    - a merged ticket goes to regression once its PR has merged on GitHub (so regression
+      runs on dev, after the deploy). pr_merged(key) says whether it has
+    - a regression pass goes to performance if the dev asked for a check
+    Deploying to prod is a person's step; nothing here moves a ticket past regression.
     """
+    from wf import github_status
+
+    if pr_merged is None:
+        def pr_merged(key):
+            row = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'pr' "
+                               "order by id desc limit 1", (key,)).fetchone()
+            return bool(row) and github_status.pr_status(row[0]).get("merged", False)
     ensure_schema(conn)
     moved: list[str] = []
     rows = conn.execute(
-        "select key, stage from ticket where stage in ('pr_open', 'pr_in_review', 'merged', 'regression', 'performance') "
+        "select key, stage from ticket where stage in ('pr_open', 'pr_in_review', 'merged', 'regression') "
         "and removed_at is null").fetchall()
     for row in rows:
         key, stage = row["key"], row["stage"]
         if stage == "merged":
-            board.move_stage(conn, key, "regression", "harness", "merged; regression next")
-            moved.append(key)
+            if pr_merged(key):
+                board.move_stage(conn, key, "regression", "harness", "PR merged on GitHub; regression on dev")
+                moved.append(key)
+            continue
+        if stage == "regression":
+            if board.perf_requested(conn, key):
+                proc = subprocess.run(["git", "rev-parse", "--verify", "--quiet", branch_for(key)], cwd=repo,
+                                      capture_output=True, text=True)
+                if proc.returncode == 0 and "qa" in board.approvals_since_stage(conn, key, proc.stdout.strip(), "regression"):
+                    board.move_stage(conn, key, "performance", "harness", "regression passed; performance requested")
+                    moved.append(key)
             continue
         proc = subprocess.run(["git", "rev-parse", "--verify", "--quiet", branch_for(key)], cwd=repo,
                               capture_output=True, text=True)
         if proc.returncode != 0:
             continue
         head = proc.stdout.strip()
-        approvals = board.approvals_at(conn, key, head)
-        if stage in ("pr_open", "pr_in_review") and "pr_review" in approvals:
+        if stage in ("pr_open", "pr_in_review") and "pr_review" in board.approvals_at(conn, key, head):
             board.move_stage(conn, key, "ready_for_qa", "harness", f"review approved at {head[:8]}")
-            moved.append(key)
-        elif stage == "regression" and "qa" in board.approvals_since_stage(conn, key, head, "regression"):
-            target = "performance" if board.perf_requested(conn, key) else "ready_for_prod"
-            board.move_stage(conn, key, target, "harness", f"regression passed at {head[:8]}")
-            moved.append(key)
-        elif stage == "performance" and "performance" in board.approvals_since_stage(conn, key, head, "performance"):
-            board.move_stage(conn, key, "ready_for_prod", "harness", f"performance passed at {head[:8]}")
             moved.append(key)
     return moved
 

@@ -37,8 +37,8 @@ def open_pull_request(
     row = conn.execute("select stage, summary from ticket where key = ?", (key,)).fetchone()
     if row is None:
         raise PublishBlocked(f"no ticket {key}")
-    if row["stage"] not in ("ready_for_prod", "deployed"):
-        raise PublishBlocked(f"{key} is in {row['stage']}; the pipeline must pass first")
+    if row["stage"] not in ("merged", "regression", "performance", "deployed"):
+        raise PublishBlocked(f"{key} is in {row['stage']}; it must be in main first")
     if not confirm:
         raise PublishBlocked("publishing to GitHub needs an explicit confirm")
     remote = subprocess.run(["git", "remote", "get-url", "origin"], cwd=repo,
@@ -67,7 +67,7 @@ def publish_ready(conn: sqlite3.Connection, *, repo: Path, runner=None) -> list[
     """Open the GitHub PR for every ticket that has passed the internal pipeline and has none yet."""
     opened = []
     rows = conn.execute(
-        "select key from ticket where stage = 'ready_for_prod' and removed_at is null "
+        "select key from ticket where stage = 'merged' and removed_at is null "
         "and key not in (select ticket_key from ticket_event where kind = 'pr')").fetchall()
     for row in rows:
         try:

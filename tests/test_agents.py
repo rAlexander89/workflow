@@ -163,12 +163,12 @@ def test_merge_succeeds_with_both_approvals_and_passing_tests(conn, repo, tmp_pa
 # --- GitHub gate ----------------------------------------------------------------------
 
 def test_github_refuses_before_the_pipeline_passes(conn, repo):
-    with pytest.raises(github_agent.PublishBlocked, match="pipeline must pass"):
+    with pytest.raises(github_agent.PublishBlocked, match="must be in main first"):
         github_agent.open_pull_request(conn, "ABC-1", repo=repo, confirm=True)
 
 
 def test_github_needs_confirm_and_a_configured_remote(conn, repo):
-    conn.execute("update ticket set stage = 'ready_for_prod' where key = 'ABC-1'")
+    conn.execute("update ticket set stage = 'merged' where key = 'ABC-1'")
     conn.commit()
     with pytest.raises(github_agent.PublishBlocked, match="confirm"):
         github_agent.open_pull_request(conn, "ABC-1", repo=repo, confirm=False)
@@ -177,7 +177,7 @@ def test_github_needs_confirm_and_a_configured_remote(conn, repo):
 
 
 def test_github_pushes_the_branch_opens_the_pr_and_records_the_link(conn, repo):
-    conn.execute("update ticket set stage = 'ready_for_prod' where key = 'ABC-1'")
+    conn.execute("update ticket set stage = 'merged' where key = 'ABC-1'")
     conn.commit()
     git(["remote", "add", "origin", "git@example.invalid:o/r.git"], repo)
     seen = []
@@ -242,36 +242,47 @@ def _set_stage(conn, stage):
     conn.commit()
 
 
-def test_merged_goes_to_regression_by_itself(conn, repo, tmp_path):
+def test_merged_goes_to_regression_only_after_the_github_merge(conn, repo, tmp_path):
     _branch_with_change(repo, tmp_path)
     _set_stage(conn, "merged")
-    assert agents.advance_pipeline(conn, repo=repo) == ["ABC-1"]
+    assert agents.advance_pipeline(conn, repo=repo, pr_merged=lambda k: False) == []
+    assert ticket_row(conn, "ABC-1")["stage"] == "merged"
+    assert agents.advance_pipeline(conn, repo=repo, pr_merged=lambda k: True) == ["ABC-1"]
     assert ticket_row(conn, "ABC-1")["stage"] == "regression"
 
 
-def test_regression_pass_goes_straight_to_prod_without_a_perf_request(conn, repo, tmp_path):
+def test_regression_pass_waits_for_a_person_to_deploy(conn, repo, tmp_path):
     wt = _branch_with_change(repo, tmp_path)
     _set_stage(conn, "regression")
     board.record_approval(conn, "ABC-1", "qa", agents.head_of(wt), clock=clock)
-    agents.advance_pipeline(conn, repo=repo)
-    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_prod"
+    agents.advance_pipeline(conn, repo=repo, pr_merged=lambda k: True)
+    assert ticket_row(conn, "ABC-1")["stage"] == "regression"
+    assert agents.prod_ready(conn, "ABC-1", repo)
 
 
 def test_regression_pass_goes_to_performance_when_the_dev_asked(conn, repo, tmp_path):
     wt = _branch_with_change(repo, tmp_path)
     _set_stage(conn, "regression")
-    board.request_perf_check(conn, "ABC-1", "dev", "changes a hot path", clock=clock)
+    board.request_perf_check(conn, "ABC-1", "dev", "changes a hot path")
     board.record_approval(conn, "ABC-1", "qa", agents.head_of(wt), clock=clock)
-    agents.advance_pipeline(conn, repo=repo)
+    agents.advance_pipeline(conn, repo=repo, pr_merged=lambda k: True)
     assert ticket_row(conn, "ABC-1")["stage"] == "performance"
+    assert not agents.prod_ready(conn, "ABC-1", repo)  # performance still has to pass
 
 
-def test_performance_pass_goes_to_prod_ready(conn, repo, tmp_path):
+def test_performance_pass_makes_the_ticket_ready_to_deploy(conn, repo, tmp_path):
     wt = _branch_with_change(repo, tmp_path)
     _set_stage(conn, "performance")
+    board.request_perf_check(conn, "ABC-1", "dev", "hot path")
+    board.record_approval(conn, "ABC-1", "qa", agents.head_of(wt), clock=clock)
     board.record_approval(conn, "ABC-1", "performance", agents.head_of(wt), clock=clock)
-    agents.advance_pipeline(conn, repo=repo)
-    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_prod"
+    assert agents.prod_ready(conn, "ABC-1", repo)
+
+
+def test_a_deploy_needs_a_regression_pass_on_the_current_commit(conn, repo, tmp_path):
+    _branch_with_change(repo, tmp_path)
+    _set_stage(conn, "regression")
+    assert not agents.prod_ready(conn, "ABC-1", repo)
 
 
 def test_only_the_dev_can_request_a_perf_check(conn):

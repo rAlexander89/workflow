@@ -114,7 +114,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                     "role": None if flags else agents.STAGE_ROLE.get(r["stage"]),
                     "can_merge": False,
                     "can_publish": r["stage"] == "deployed",
-                    "can_deploy": r["stage"] == "ready_for_prod",
+                    "can_deploy": r["stage"] in ("regression", "performance") and agents.prod_ready(conn, r["key"], _repo_path(c, None)),
                     "last": {"exit_code": last["exit_code"]} if last else None,
                 })
         finally:
@@ -244,12 +244,16 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
 
     @app.post("/agents/deploy/{key}")
     def deploy_ticket(key: str, confirm: str = Form("")):
-        """The one manual step: a person deploys a ticket that is ready for prod."""
+        """The one manual step: a person deploys a ticket that has passed regression."""
         if confirm != "yes":
             _log(f"{key}: deploy to prod needs the confirm box ticked")
             return RedirectResponse("/agents", status_code=303)
+        c = settings()
         conn = board.connect(db_path)
         try:
+            if not agents.prod_ready(conn, key, _repo_path(c, None)):
+                _log(f"{key}: deploy refused: regression has not passed on the current commit")
+                return RedirectResponse("/agents", status_code=303)
             board.move_stage(conn, key, "deployed", "user", "deployed to prod by the user")
             _log(f"{key} deployed to prod (by you)")
         except board.BoardError as e:

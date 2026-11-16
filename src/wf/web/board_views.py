@@ -120,6 +120,15 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             pr_url = (c.execute("select detail from ticket_event where ticket_key=? and kind='pr' "
                                 "order by id desc limit 1", (key,)).fetchone() or [None])[0]
             from wf import github_status as _gh
+
+            def agents_prod_ready(conn, k):
+                try:
+                    from wf import config as _cfg
+                    cfg = _cfg.load(_cfg.default_path())
+                    repo = Path(next(r.path for r in cfg.repos))
+                    return _agents.prod_ready(conn, k, repo)
+                except Exception:
+                    return False
             gh = _gh.pr_status(pr_url) if pr_url else {}
             flag_reason = next((e["detail"] for e in events if e["kind"] == "flag"), "") if t["flag_list"] else ""
             return page(request, "ticket.html", "agents", ticket=t, comments=detail["comments"],
@@ -130,7 +139,9 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
                             last_run_failed=bool(runs and (runs[0]["exit_code"] != 0 or runs[0]["timed_out"])),
                             perf_requested=board.perf_requested(c, key),
                             pr_url=pr_url, pr_merged=gh.get("merged", False),
-                            pr_checks=gh.get("checks", "none"), pr_closed=gh.get("ok") and gh.get("state") == "CLOSED"))
+                            pr_checks=gh.get("checks", "none"), pr_closed=gh.get("ok") and gh.get("state") == "CLOSED",
+                            prod_ready=bool(t["stage"] in ("regression", "performance") and
+                                            agents_prod_ready(c, key)) if t["stage"] else False))
         finally:
             c.close()
 

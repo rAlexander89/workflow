@@ -18,7 +18,6 @@ STAGE_INFO: dict[str, tuple[str, str]] = {
     "merged": ("Merged to main", "Harness"),
     "regression": ("Regression", "QA"),
     "performance": ("Performance", "Performance bot"),
-    "ready_for_prod": ("Ready for prod", "Person"),
     "deployed": ("Deployed to prod", "Person"),
 }
 
@@ -50,18 +49,18 @@ FLOW = [
     ("qa", "QA", "ready_for_qa"),
     ("approved", "QA approved", "qa_approved"),
     ("main", "In main", "merged"),
-    ("regression", "Regression", "regression"),
-    ("performance", "Performance", "performance"),
     ("github", "GitHub PR", None),
     ("dev", "Deployed to dev", None),
-    ("prod_ready", "Ready for prod", "ready_for_prod"),
+    ("regression", "Regression on dev", "regression"),
+    ("performance", "Performance", "performance"),
     ("prod", "Deployed to prod", "deployed"),
 ]
 _ORDER = [stage for _, _, stage in FLOW if stage]
 
 
 def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: bool,
-                pr_url: str | None, pr_merged: bool, pr_checks: str = "none", pr_closed: bool = False) -> list[dict]:
+                pr_url: str | None, pr_merged: bool, pr_checks: str = "none", pr_closed: bool = False,
+                prod_ready: bool = False) -> list[dict]:
     """Each step with its state: done (green), current (yellow), failed (red), skipped, or todo.
 
     A step is failed only where the ticket is now and its last agent run failed. Performance is
@@ -72,8 +71,7 @@ def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: boo
     out = []
     for key, label, at in FLOW:
         state = "todo"
-        if key == "performance" and not perf_requested and (stage is None or pos >= _ORDER.index("performance")
-                                                             or stage in ("ready_for_prod", "deployed")):
+        if key == "performance" and not perf_requested and (stage is None or pos >= _ORDER.index("regression")):
             state = "skipped"
         elif key == "github":
             if not pr_url:
@@ -84,6 +82,8 @@ def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: boo
                 state = "failed"
             else:
                 state = "current"
+        elif key == "main":
+            state = "done" if pos >= _ORDER.index("merged") else ("current" if stage == "qa_approved" else "todo")
         elif key == "dev":
             state = "done" if pr_merged else "todo"
         elif at is not None and stage == at:
@@ -92,7 +92,7 @@ def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: boo
             state = "done"
         elif at is not None and stage == "deployed":
             state = "done"
-        if key == "prod" and stage == "deployed":
-            state = "done"
+        if key == "prod":
+            state = "done" if stage == "deployed" else ("current" if prod_ready else "todo")
         out.append({"key": key, "label": label, "state": state})
     return out

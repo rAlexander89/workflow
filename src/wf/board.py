@@ -570,11 +570,7 @@ ALLOWED_MOVES: frozenset[tuple[str, str, str]] = frozenset({
     ("qa", "regression", "deployed"),
     ("harness", "merged", "regression"),
     ("qa", "regression", "performance"),
-    ("qa", "regression", "ready_for_prod"),
     ("harness", "regression", "performance"),
-    ("harness", "regression", "ready_for_prod"),
-    ("performance", "performance", "ready_for_prod"),
-    ("harness", "performance", "ready_for_prod"),
     ("harness", "qa_approved", "merged"),
 })
 
