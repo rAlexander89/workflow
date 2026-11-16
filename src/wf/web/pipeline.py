@@ -41,3 +41,53 @@ def progress(current: str | None) -> list[dict]:
     for i, s in enumerate(stages):
         s["state"] = "done" if i < idx else "current" if i == idx else "todo"
     return stages
+
+
+# The steps a ticket goes through after it leaves the dev stages, in order. Each step is
+# tied to the internal stage that means "this step is happening now".
+FLOW = [
+    ("pr_review", "Internal PR review", "pr_open"),
+    ("qa", "QA", "ready_for_qa"),
+    ("approved", "QA approved", "qa_approved"),
+    ("main", "In main", "merged"),
+    ("regression", "Regression", "regression"),
+    ("performance", "Performance", "performance"),
+    ("github", "GitHub PR", None),
+    ("dev", "Deployed to dev", None),
+    ("prod_ready", "Ready for prod", "ready_for_prod"),
+    ("prod", "Deployed to prod", "deployed"),
+]
+_ORDER = [stage for _, _, stage in FLOW if stage]
+
+
+def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: bool,
+                pr_url: str | None, pr_merged: bool) -> list[dict]:
+    """Each step with its state: done (green), current (yellow), failed (red), skipped, or todo.
+
+    A step is failed only where the ticket is now and its last agent run failed. Performance is
+    skipped unless the dev asked for it. "Deployed to dev" stays todo until the GitHub merge
+    lands on main; the dev deploy is not yet reported back to the workflow.
+    """
+    pos = _ORDER.index(stage) if stage in _ORDER else -1
+    out = []
+    for key, label, at in FLOW:
+        state = "todo"
+        if key == "performance" and not perf_requested and (stage is None or pos >= _ORDER.index("performance")
+                                                             or stage in ("ready_for_prod", "deployed")):
+            state = "skipped"
+        elif key == "github":
+            state = "todo" if not pr_url else ("done" if pr_merged else "current")
+            if pr_url and not pr_merged and stage not in ("ready_for_prod", "deployed"):
+                state = "todo"
+        elif key == "dev":
+            state = "done" if pr_merged else "todo"
+        elif at is not None and stage == at:
+            state = "failed" if last_run_failed else "current"
+        elif at is not None and pos >= 0 and _ORDER.index(at) < pos:
+            state = "done"
+        elif at is not None and stage == "deployed":
+            state = "done"
+        if key == "prod" and stage == "deployed":
+            state = "done"
+        out.append({"key": key, "label": label, "state": state})
+    return out

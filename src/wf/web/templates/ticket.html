@@ -7,6 +7,8 @@
   .step { font-size:12px; padding:4px 10px; border-radius:999px; background:var(--chip); color:var(--muted); }
   .step.done { color:var(--ok); }
   .step.current { background:var(--warn-bg); color:var(--warn); font-weight:600; }
+  .step.failed { background:var(--bad-bg); color:var(--bad); font-weight:600; }
+  .step.skipped { opacity:.5; text-decoration:line-through; }
   .cols { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px; margin-top:14px; }
   .item { padding:8px 0; border-bottom:1px solid var(--line); font-size:13px; }
   .item:last-child { border-bottom:0; }
@@ -52,8 +54,9 @@
 {% endif %}
 
 <div class="strip">
-  {% for s in stages %}<span class="step {{ s.state }}">{{ s.label }}</span>{% endfor %}
+  {% for s in flow %}<span class="step {{ s.state }}">{{ s.label }}</span>{% endfor %}
 </div>
+<div class="muted" style="font-size:12px;margin-top:4px">Yellow: happening now · Green: done · Red: failed at this step · Grey: not started, or skipped</div>
 
 <div class="cols">
   <div>

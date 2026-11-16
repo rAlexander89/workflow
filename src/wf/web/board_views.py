@@ -120,7 +120,14 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             flag_reason = next((e["detail"] for e in events if e["kind"] == "flag"), "") if t["flag_list"] else ""
             return page(request, "ticket.html", "agents", ticket=t, comments=detail["comments"],
                         events=events, noise_count=len(noise), flag_reason=flag_reason, outbox_items=items, runs=runs, next_role=next_role,
-                        stages=_pipeline.progress(t["stage"]), title=key)
+                        stages=_pipeline.progress(t["stage"]), title=key,
+                        flow=_pipeline.flow_states(
+                            t["stage"],
+                            last_run_failed=bool(runs and (runs[0]["exit_code"] != 0 or runs[0]["timed_out"])),
+                            perf_requested=board.perf_requested(c, key),
+                            pr_url=(c.execute("select detail from ticket_event where ticket_key=? and kind='pr' "
+                                              "order by id desc limit 1", (key,)).fetchone() or [None])[0],
+                            pr_merged=False))
         finally:
             c.close()
 
