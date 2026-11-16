@@ -568,6 +568,13 @@ ALLOWED_MOVES: frozenset[tuple[str, str, str]] = frozenset({
     ("harness", "pr_in_review", "ready_for_qa"),
     ("pr_review", "pr_in_review", "ready_for_qa"),
     ("qa", "regression", "deployed"),
+    ("harness", "merged", "regression"),
+    ("qa", "regression", "performance"),
+    ("qa", "regression", "ready_for_prod"),
+    ("harness", "regression", "performance"),
+    ("harness", "regression", "ready_for_prod"),
+    ("performance", "performance", "ready_for_prod"),
+    ("harness", "performance", "ready_for_prod"),
     ("harness", "qa_approved", "merged"),
 })
 
@@ -695,7 +702,7 @@ def add_comment(conn: sqlite3.Connection, key: str, author: str, body: str,
 def record_approval(conn: sqlite3.Connection, key: str, role: str, head: str,
                     clock: Callable[[], float] = time.time) -> None:
     """A reviewer approves the ticket at a specific commit. The merge gate reads these."""
-    if role not in ("pr_review", "qa"):
+    if role not in ("pr_review", "qa", "performance"):
         raise BoardError(f"{role!r} cannot approve a ticket")
     if not head:
         raise BoardError("an approval needs the commit it covers")
@@ -729,3 +736,30 @@ def carry_workflow_statuses(conn: sqlite3.Connection, data: dict) -> dict:
                 p.setdefault("statuses", []).append(
                     {"name": row["name"], "category": row["category"], "source": "workflow"})
     return data
+
+
+def request_perf_check(conn: sqlite3.Connection, key: str, actor: str, reason: str,
+                       clock: Callable[[], float] = time.time) -> None:
+    """The dev agent marks a ticket as worth a performance check. Stored on the ticket's history."""
+    if actor != "dev":
+        raise BoardError("only the dev role can request a performance check")
+    if conn.execute("select 1 from ticket where key = ?", (key,)).fetchone() is None:
+        raise BoardError(f"no ticket {key}")
+    with conn:
+        _event(conn, key, int(clock()), actor, "perf_request", None, "requested", reason)
+
+
+def perf_requested(conn: sqlite3.Connection, key: str) -> bool:
+    return conn.execute(
+        "select 1 from ticket_event where ticket_key = ? and kind = 'perf_request' limit 1", (key,)).fetchone() is not None
+
+
+def approvals_since_stage(conn: sqlite3.Connection, key: str, head: str, stage: str) -> set[str]:
+    """Roles that approved this commit after the ticket last entered `stage`."""
+    entered = conn.execute(
+        "select max(at) from ticket_event where ticket_key = ? and kind = 'stage' and to_value = ?",
+        (key, stage)).fetchone()[0] or 0
+    rows = conn.execute(
+        "select distinct actor from ticket_event where ticket_key = ? and kind = 'approve' and detail = ? and at >= ?",
+        (key, head, entered)).fetchall()
+    return {r["actor"] for r in rows}

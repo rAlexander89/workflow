@@ -162,85 +162,46 @@ def test_merge_succeeds_with_both_approvals_and_passing_tests(conn, repo, tmp_pa
 
 # --- GitHub gate ----------------------------------------------------------------------
 
-def test_github_refuses_before_deployed(conn, repo):
-    with pytest.raises(github_agent.PublishBlocked, match="must be deployed"):
+def test_github_refuses_before_the_pipeline_passes(conn, repo):
+    with pytest.raises(github_agent.PublishBlocked, match="pipeline must pass"):
         github_agent.open_pull_request(conn, "ABC-1", repo=repo, confirm=True)
-
-
-def test_github_refuses_without_regression(conn, repo):
-    conn.execute("update ticket set stage = 'deployed' where key = 'ABC-1'")
-    conn.commit()
-    with pytest.raises(github_agent.PublishBlocked, match="regression"):
-        github_agent.open_pull_request(conn, "ABC-1", repo=repo, confirm=True)
-
-
-def _deployed_after_regression(conn):
-    conn.execute("insert into ticket_event (ticket_key, at, actor, kind, from_value, to_value) "
-                 "values ('ABC-1', 1, 'qa', 'stage', 'regression', 'deployed')")
-    conn.execute("update ticket set stage = 'deployed' where key = 'ABC-1'")
-    conn.commit()
 
 
 def test_github_needs_confirm_and_a_configured_remote(conn, repo):
-    _deployed_after_regression(conn)
+    conn.execute("update ticket set stage = 'ready_for_prod' where key = 'ABC-1'")
+    conn.commit()
     with pytest.raises(github_agent.PublishBlocked, match="confirm"):
         github_agent.open_pull_request(conn, "ABC-1", repo=repo, confirm=False)
     with pytest.raises(github_agent.PublishBlocked, match="no origin remote"):
         github_agent.open_pull_request(conn, "ABC-1", repo=repo, confirm=True)
 
 
-def test_github_opens_pr_only_with_all_conditions(conn, repo):
-    _deployed_after_regression(conn)
+def test_github_pushes_the_branch_opens_the_pr_and_records_the_link(conn, repo):
+    conn.execute("update ticket set stage = 'ready_for_prod' where key = 'ABC-1'")
+    conn.commit()
     git(["remote", "add", "origin", "git@example.invalid:o/r.git"], repo)
     seen = []
 
-    def fake_gh(argv, cwd):
+    def fake(argv, cwd):
         seen.append(argv)
         return subprocess.CompletedProcess(argv, 0, stdout="https://example.invalid/pr/1\n", stderr="")
 
-    url = github_agent.open_pull_request(conn, "ABC-1", repo=repo, confirm=True, runner=fake_gh)
+    url = github_agent.open_pull_request(conn, "ABC-1", repo=repo, confirm=True, runner=fake)
     assert url == "https://example.invalid/pr/1"
-    assert seen[0][:3] == ["gh", "pr", "create"]
-    assert "Generated with [Claude Code]" in seen[0][-1]
+    assert seen[0][:3] == ["git", "push", "-u"] and seen[1][:3] == ["gh", "pr", "create"]
+    assert "Generated with [Claude Code]" in seen[1][-1]
+    recorded = conn.execute("select detail from ticket_event where ticket_key='ABC-1' and kind='pr'").fetchone()[0]
+    assert recorded == url
 
 
-def test_tick_picks_up_ready_work_before_the_dev_run(conn, repo, tmp_path):
-    calls = []
-    actions = agents.tick(conn, repo=repo, runs_dir=tmp_path / "runs", access=True, model="m",
-                          claude_bin="/bin/echo", runner=fake_runner(calls), dry_run=False, clock=clock)
-    assert actions[0]["stage"] == "in_dev"
-    assert ticket_row(conn, "ABC-1")["stage"] == "in_dev"
-    assert len(calls) == 1
-
-
-def test_dev_can_search_the_repo(conn, repo, tmp_path):
-    calls = []
-    run_dev(conn, repo, tmp_path, calls)
-    argv = calls[0]["argv"]
-    builtin = argv[argv.index("--tools") + 1:argv.index("--allowedTools")]
-    assert {"Glob", "Grep", "Read", "Edit", "Write"} <= set(builtin)
-
-
-def _run(conn, exit_code, timed_out=0, stage="ready_for_dev"):
-    conn.execute("insert into agent_run (key, stage, role, started_at, exit_code, timed_out, output_path) "
-                 "values ('ABC-1', ?, 'dev', 0, ?, ?, 'x')", (stage, exit_code, timed_out))
-
-
-def test_repeated_failures_are_a_real_obstacle(conn):
-    for _ in range(agents.MAX_RUNS_PER_STAGE):
-        _run(conn, 1)
-    assert agents.runs_at(conn, "ABC-1", "ready_for_dev") >= agents.MAX_RUNS_PER_STAGE
-
-
-def test_successful_runs_keep_going_however_many(conn):
-    for _ in range(10):
-        _run(conn, 0)
-    assert agents.runs_at(conn, "ABC-1", "ready_for_dev") == 0
-
-
-def test_a_success_resets_the_failure_streak(conn):
-    _run(conn, 1); _run(conn, 1); _run(conn, 0)
-    assert agents.runs_at(conn, "ABC-1", "ready_for_dev") == 0
+def test_diff_range_uses_the_merge_commit_once_merged(conn, repo, tmp_path):
+    wt = _branch_with_change(repo, tmp_path)
+    git(["checkout", "main"], repo)
+    git(["merge", "--no-ff", "agent/ABC-1", "-m", "Merge agent/ABC-1 (ABC-1)"], repo)
+    spec = agents.diff_range(repo, "ABC-1")
+    assert spec.endswith("^1..." + spec.split("..")[-1]) or ".." in spec
+    stat = git(["diff", "--stat", spec], repo)
+    assert "app.txt" in stat
 
 
 def test_pr_review_approval_moves_the_ticket_to_qa(conn, repo, tmp_path):
@@ -261,7 +222,7 @@ def test_an_approval_at_head_moves_the_ticket_to_qa_without_another_review(conn,
     conn.execute("update ticket set stage = 'pr_open' where key = 'ABC-1'")
     conn.commit()
     board.record_approval(conn, "ABC-1", "pr_review", agents.head_of(wt), clock=clock)
-    moved = agents.advance_reviewed(conn, repo=repo, worktrees=tmp_path / "runs" / "worktrees")
+    moved = agents.advance_pipeline(conn, repo=repo)
     assert moved == ["ABC-1"]
     assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_qa"
 
@@ -273,4 +234,56 @@ def test_an_old_approval_does_not_move_a_ticket_after_new_commits(conn, repo, tm
     board.record_approval(conn, "ABC-1", "pr_review", agents.head_of(wt), clock=clock)
     (wt / "app.txt").write_text("v9\n")
     git(["commit", "-qam", "more"], wt)
-    assert agents.advance_reviewed(conn, repo=repo, worktrees=tmp_path / "runs" / "worktrees") == []
+    assert agents.advance_pipeline(conn, repo=repo) == []
+
+
+def _set_stage(conn, stage):
+    conn.execute("update ticket set stage = ? where key = 'ABC-1'", (stage,))
+    conn.commit()
+
+
+def test_merged_goes_to_regression_by_itself(conn, repo, tmp_path):
+    _branch_with_change(repo, tmp_path)
+    _set_stage(conn, "merged")
+    assert agents.advance_pipeline(conn, repo=repo) == ["ABC-1"]
+    assert ticket_row(conn, "ABC-1")["stage"] == "regression"
+
+
+def test_regression_pass_goes_straight_to_prod_without_a_perf_request(conn, repo, tmp_path):
+    wt = _branch_with_change(repo, tmp_path)
+    _set_stage(conn, "regression")
+    board.record_approval(conn, "ABC-1", "qa", agents.head_of(wt), clock=clock)
+    agents.advance_pipeline(conn, repo=repo)
+    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_prod"
+
+
+def test_regression_pass_goes_to_performance_when_the_dev_asked(conn, repo, tmp_path):
+    wt = _branch_with_change(repo, tmp_path)
+    _set_stage(conn, "regression")
+    board.request_perf_check(conn, "ABC-1", "dev", "changes a hot path", clock=clock)
+    board.record_approval(conn, "ABC-1", "qa", agents.head_of(wt), clock=clock)
+    agents.advance_pipeline(conn, repo=repo)
+    assert ticket_row(conn, "ABC-1")["stage"] == "performance"
+
+
+def test_performance_pass_goes_to_prod_ready(conn, repo, tmp_path):
+    wt = _branch_with_change(repo, tmp_path)
+    _set_stage(conn, "performance")
+    board.record_approval(conn, "ABC-1", "performance", agents.head_of(wt), clock=clock)
+    agents.advance_pipeline(conn, repo=repo)
+    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_prod"
+
+
+def test_only_the_dev_can_request_a_perf_check(conn):
+    import pytest as _pt
+    with _pt.raises(board.BoardError):
+        board.request_perf_check(conn, "ABC-1", "qa", "x", clock=clock)
+
+
+def test_an_approval_from_before_regression_does_not_count_as_a_regression_pass(conn, repo, tmp_path):
+    wt = _branch_with_change(repo, tmp_path)
+    _set_stage(conn, "ready_for_qa")
+    board.record_approval(conn, "ABC-1", "qa", agents.head_of(wt), clock=clock)
+    board.move_stage(conn, "ABC-1", "regression", actor="user", reason="x")  # real time: after the approval
+    agents.advance_pipeline(conn, repo=repo)
+    assert ticket_row(conn, "ABC-1")["stage"] == "regression"

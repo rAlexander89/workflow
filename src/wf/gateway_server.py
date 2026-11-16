@@ -60,6 +60,8 @@ TOOLS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "bot_logout", "description": "Log out of the local app.",
      "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "request_perf_check", "description": "Dev only: ask for a performance check on this ticket, with the reason.",
+     "inputSchema": {"type": "object", "required": ["reason"], "properties": {"reason": {"type": "string"}}}},
     {"name": "open_pr", "description": "Not available to agents. Refused.",
      "inputSchema": {"type": "object", "properties": {}}},
 ]
@@ -152,6 +154,14 @@ class Gateway:
             raise ValueError("no worktree for this run")
         return subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.scope.worktree,
                               capture_output=True, text=True, check=True).stdout.strip()
+
+    def request_perf_check(self, args: dict) -> dict:
+        conn = board.connect(self.scope.db)
+        try:
+            board.request_perf_check(conn, self.scope.key, self.scope.role, args["reason"])
+        finally:
+            conn.close()
+        return {"requested": True}
 
     def approve_ticket(self, _args: dict) -> dict:
         head = self._head()

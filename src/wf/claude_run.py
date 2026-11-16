@@ -34,7 +34,7 @@ PROFILES: dict[str, dict[str, list[str]]] = {
         "builtin_tools": ["Read", "Edit", "Write", "Glob", "Grep"],
         "allowed_tools": ["Read", "Edit", "Write", "Glob", "Grep"] + _tools(
             "get_ticket", "move_ticket", "flag_ticket", "run_tests", "commit", "post_comment",
-            "start_app", "fetch_local", "stop_app"),
+            "start_app", "fetch_local", "stop_app", "request_perf_check"),
     },
     "pr_review": {
         "builtin_tools": ["Read", "Glob", "Grep"],
@@ -56,8 +56,10 @@ PROFILES: dict[str, dict[str, list[str]]] = {
         "allowed_tools": ["Read", "Glob", "Grep"] + _tools("get_ticket", "move_ticket", "post_comment", "flag_ticket"),
     },
     "performance": {
-        "builtin_tools": ["Read", "Glob", "Grep"],
-        "allowed_tools": ["Read", "Glob", "Grep"] + _tools("get_ticket", "run_tests", "post_comment", "flag_ticket"),
+        "builtin_tools": ["Read", "Edit", "Write", "Glob", "Grep"],
+        "allowed_tools": ["Read", "Edit", "Write", "Glob", "Grep"] + _tools(
+            "get_ticket", "run_tests", "commit", "post_comment", "flag_ticket", "approve_ticket",
+            "start_app", "fetch_local", "stop_app"),
     },
 }
 

@@ -112,8 +112,9 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                     "flag_reason": (reason["detail"] or "") if reason and flags else "",
                     "in_sprint": r["sprint_state"] == "active",
                     "role": None if flags else agents.STAGE_ROLE.get(r["stage"]),
-                    "can_merge": r["stage"] == "qa_approved",
+                    "can_merge": False,
                     "can_publish": r["stage"] == "deployed",
+                    "can_deploy": r["stage"] == "ready_for_prod",
                     "last": {"exit_code": last["exit_code"]} if last else None,
                 })
         finally:
@@ -138,8 +139,8 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         def work():
             conn = board.connect(db_path)
             try:
-                for key in agents.advance_reviewed(conn, repo=_repo_path(c, None), worktrees=_runs_dir(c) / "worktrees"):
-                    _log(f"{key}: review approved; moved to QA")
+                for key in agents.advance_pipeline(conn, repo=_repo_path(c, None)):
+                    _log(f"{key}: moved on by the harness")
                 actions = agents.tick(
                     conn, repo=_repo_path(c, None), runs_dir=_runs_dir(c), access=access,
                     model=c.agents.model, test_cmd=c.agents.test_cmd, app_cmd=c.agents.app_cmd,
@@ -195,6 +196,20 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                 with _lock:
                     if _state["running"]:
                         continue
+                conn = board.connect(db_path)
+                try:
+                    moved = agents.advance_pipeline(conn, repo=_repo_path(c, None))
+                finally:
+                    conn.close()
+                for key in moved:
+                    _log(f"{key}: moved on by the harness")
+                from wf import github_agent
+                conn = board.connect(db_path)
+                try:
+                    for key in github_agent.publish_ready(conn, repo=_repo_path(c, None)):
+                        _log(f"{key}: GitHub PR opened")
+                finally:
+                    conn.close()
                 if ready_work(c):
                     _start("auto pass", pass_work(c))
             except Exception as e:  # never let the loop die
@@ -226,6 +241,22 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         if not _start(f"{key} {agents.STAGE_ROLE.get('ready_for_dev', 'agent')}", work):
             _log("another action is already running")
         return RedirectResponse(f"/board/ticket/{key}", status_code=303)
+
+    @app.post("/agents/deploy/{key}")
+    def deploy_ticket(key: str, confirm: str = Form("")):
+        """The one manual step: a person deploys a ticket that is ready for prod."""
+        if confirm != "yes":
+            _log(f"{key}: deploy to prod needs the confirm box ticked")
+            return RedirectResponse("/agents", status_code=303)
+        conn = board.connect(db_path)
+        try:
+            board.move_stage(conn, key, "deployed", "user", "deployed to prod by the user")
+            _log(f"{key} deployed to prod (by you)")
+        except board.BoardError as e:
+            _log(f"{key}: deploy refused: {e}")
+        finally:
+            conn.close()
+        return RedirectResponse("/agents", status_code=303)
 
     @app.post("/agents/merge/{key}")
     def merge_ticket(key: str):
@@ -345,8 +376,10 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             if head_proc.returncode != 0:
                 return HTMLResponse('<div class="muted">No branch yet. The dev run creates it.</div>')
             head = head_proc.stdout.strip()
-            stat = subprocess.run(["git", "diff", "--stat", f"main...{branch}"], cwd=repo,
+            stat = subprocess.run(["git", "diff", "--stat", agents.diff_range(repo, key)], cwd=repo,
                                   capture_output=True, text=True).stdout.strip().splitlines()
+            pr = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'pr' "
+                              "order by id desc limit 1", (key,)).fetchone()
             approvals = sorted(board.approvals_at(conn, key, head))
             tests = conn.execute(
                 "select exit_code from agent_run where key = ? and role = 'dev' order by id desc limit 1",
@@ -360,7 +393,8 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
 <div class="item">Changes: {summary}</div>
 <div class="item">Approved at this commit: {_html.escape(approved)}</div>
 <div class="item">Last dev run: {"ok" if tests and tests[0] == 0 else "not ok" if tests else "none"}</div>
-<div class="item"><a href="/board/ticket/{_html.escape(key)}/diff" target="_blank">View the diff against main</a></div></div>"""
+<div class="item"><a href="/board/ticket/{_html.escape(key)}/diff" target="_blank">View the diff</a></div>
+{('<div class="item">GitHub PR: <a href="' + _html.escape(pr[0]) + '" target="_blank">' + _html.escape(pr[0]) + '</a></div>') if pr else ''}</div>"""
         return HTMLResponse(body)
 
     @app.get("/board/ticket/{key}/diff", response_class=PlainTextResponse)
@@ -370,7 +404,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         c = settings()
         branch = agents.branch_for(key)
         repo = _repo_path(c, None)
-        proc = subprocess.run(["git", "diff", f"main...{branch}"], cwd=repo, capture_output=True, text=True)
+        proc = subprocess.run(["git", "diff", agents.diff_range(repo, key)], cwd=repo, capture_output=True, text=True)
         return PlainTextResponse(proc.stdout or proc.stderr or "no diff")
 
     @app.get("/agents/state", response_class=HTMLResponse)

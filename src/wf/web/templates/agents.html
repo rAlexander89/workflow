@@ -55,6 +55,12 @@
         {% if t.can_merge %}
         <form method="post" action="/agents/merge/{{ t.key }}"><button class="primary" {% if state.running %}disabled{% endif %}>Merge to main</button></form>
         {% endif %}
+        {% if t.can_deploy %}
+        <form method="post" action="/agents/deploy/{{ t.key }}" class="row">
+          <label class="muted"><input type="checkbox" name="confirm" value="yes">confirm</label>
+          <button class="primary">Deploy to prod</button>
+        </form>
+        {% endif %}
         {% if t.can_publish %}
         <form method="post" action="/agents/publish/{{ t.key }}" class="row">
           <label class="muted"><input type="checkbox" name="confirm" value="yes">confirm</label>
