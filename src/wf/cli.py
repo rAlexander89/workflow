@@ -173,6 +173,187 @@ def cmd_backlog(args) -> int:
     return 0
 
 
+def _ask(prompt: str, default: str = "") -> str:
+    shown = f"{prompt} [{default}]: " if default else f"{prompt}: "
+    return input(shown).strip() or default
+
+
+def cmd_init(args) -> int:
+    from wf import onboarding
+
+    path = _cfg_path(args)
+    interactive = sys.stdin.isatty()
+
+    # 1. The Atlassian MCP lives in the Claude session, so the user connects it there.
+    print("Step 1: connect the Atlassian MCP.")
+    print("  In Claude Code, connect the Atlassian (Jira) MCP and sign in with your Atlassian account.")
+    print("  Then ask Claude to confirm the connection.")
+    if not args.mcp_connected:
+        if not interactive:
+            print("Re-run with --mcp-connected once the MCP is connected.", file=sys.stderr)
+            return 2
+        if _ask("Is the Atlassian MCP connected? (y/n)", "n").lower() not in ("y", "yes"):
+            print("Connect the MCP, then run `wf init` again.")
+            return 0
+
+    # 2. Find the repos the user works on.
+    roots = args.root
+    if not roots:
+        if not interactive:
+            print("Pass --root FOLDER to say where your code lives.", file=sys.stderr)
+            return 2
+        roots = [_ask("Step 2: folder where you keep your code", "~/code")]
+    candidates = onboarding.suggest([Path(r) for r in roots])
+    if not candidates:
+        print("No git repositories found under " + ", ".join(roots) + ".")
+        return 0
+
+    print("\nRepos found, most worked on first:")
+    for i, c in enumerate(candidates, 1):
+        remote = c.remote or "(no origin)"
+        print(f"  {i:>2}. {c.name:<20} {remote:<32} your commits: {c.my_commits}  {c.path}")
+
+    # 3. The user picks the repos to link.
+    picks = args.pick
+    if picks is None:
+        if not interactive:
+            print("Re-run with --pick 1,2,... to choose repos to link.")
+            return 0
+        picks = _ask("Step 3: which repos do you work on? (numbers, comma-separated)", "")
+    chosen: list[int] = []
+    for token in picks.replace(" ", "").split(","):
+        if not token:
+            continue
+        if not token.isdigit() or not 1 <= int(token) <= len(candidates):
+            print(f"error: {token!r} is not one of the numbers above", file=sys.stderr)
+            return 2
+        chosen.append(int(token))
+    if not chosen:
+        print("Nothing picked. Run `wf init` again when you're ready.")
+        return 0
+
+    # 4. Link them, with the org/repo each one pushes to.
+    cfg = cfgmod.load(path)
+    for n in chosen:
+        c = candidates[n - 1]
+        name = c.name
+        if interactive:
+            name = _ask(f"Name for {c.path}", c.name)
+        remote = c.remote
+        if not remote and interactive:
+            remote = _ask("Org/repo it pushes to (owner/name)", "")
+        if cfg.add_repo(name, c.path, remote):
+            print(f"linked {name} at {c.path} -> {remote or 'no remote yet'}")
+        else:
+            print(f"{name} is already linked")
+    try:
+        cfgmod.save(cfg, path)
+    except OSError as e:
+        print(f"error: could not save {path}: {e}", file=sys.stderr)
+        return 2
+
+    print("\nNext: in your Claude session, run the Jira sync (see docs/sync-format.md),")
+    print("then `wf sync payload.json` and `wf doctor`.")
+    return 0
+
+
+def _load_json(path: str):
+    import json
+
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"error: could not read {path}: {e}")
+
+
+def cmd_outbox(args) -> int:
+    import json
+    from wf import board, outbox
+
+    conn = board.connect(_db_path(args))
+    try:
+        if args.outbox_cmd == "list":
+            print(json.dumps(outbox.listing(conn, args.status), indent=2))
+        elif args.outbox_cmd == "pending":
+            print(json.dumps(outbox.pending(conn), indent=2))
+        elif args.outbox_cmd == "plan":
+            data = _load_json(args.from_file)
+            print(json.dumps(outbox.plan(conn, data.get("observations", data)), indent=2))
+        elif args.outbox_cmd == "ack":
+            print(json.dumps(outbox.ack(conn, _load_json(args.from_file)), indent=2))
+        elif args.outbox_cmd == "retry":
+            outbox.retry(conn, args.id)
+            print(f"item {args.id} is pending again")
+    except board.BoardError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_status(args) -> int:
+    import time
+    from wf import board
+
+    conn = board.connect(_db_path(args))
+    try:
+        s = board.status(conn, time.time())
+    finally:
+        conn.close()
+    run = s["last_sync"]
+    if run is None:
+        print("never synced: run the sync from your Claude session, then `wf sync`")
+    else:
+        age = s["age_seconds"]
+        age_text = "unknown" if age is None else f"{age // 3600}h {age % 3600 // 60}m ago"
+        print(f"last sync: {run['kind']} {run['status']}, {age_text}")
+        if run["status"] == "failed":
+            print(f"  error: {run['error']}")
+        elif age is not None and age > 24 * 3600:
+            print("  stale: run a sync from your Claude session")
+    print(f"active sprint: {s['active_tickets']} tickets; backlog: {s['backlog_tickets']} tickets")
+    for f in s["flagged"]:
+        print(f"flagged: {f['key']} {f['flags']}")
+    for u in s["unmapped_stages"]:
+        print(f"blocked: {u['project_key']} stage {u['stage']!r}: {u['reason']}")
+    return 0
+
+
+def cmd_move(args) -> int:
+    from wf import board
+
+    conn = board.connect(_db_path(args))
+    try:
+        board.move_stage(conn, args.key, args.stage, args.actor, args.reason)
+    except board.BoardError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    finally:
+        conn.close()
+    print(f"{args.key} -> {args.stage}")
+    return 0
+
+
+def cmd_flag(args) -> int:
+    from wf import board
+
+    conn = board.connect(_db_path(args))
+    try:
+        if args.clear:
+            board.clear_flag(conn, args.key, args.flag, args.actor)
+            print(f"cleared {args.flag} on {args.key}")
+        else:
+            board.set_flag(conn, args.key, args.flag, args.actor, args.reason or "")
+            print(f"flagged {args.key} {args.flag}")
+    except board.BoardError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    finally:
+        conn.close()
+    return 0
+
+
 def cmd_sprints(args) -> int:
     from wf import board
 
@@ -391,6 +572,49 @@ def build_parser() -> argparse.ArgumentParser:
     bl = sub.add_parser("backlog", help="show the backlog (tickets in no sprint), grouped by stage")
     bl.add_argument("--db", default=None, help="SQLite file (default: $WF_DB or ./wf.sqlite)")
     bl.set_defaults(func=cmd_backlog)
+
+    ini = sub.add_parser("init", help="set up this machine: connect the MCP, then pick the repos you work on")
+    ini.add_argument("--mcp-connected", action="store_true", help="say the Atlassian MCP is already connected")
+    ini.add_argument("--root", action="append", default=[], metavar="FOLDER",
+                     help="folder to look in for git repos (repeat for more)")
+    ini.add_argument("--pick", default=None, metavar="N,N,...", help="numbers of the repos to link")
+    ini.set_defaults(func=cmd_init)
+
+    ob = sub.add_parser("outbox", help="moves waiting to be pushed to Jira (used by the Jira agent)")
+    ob_sub = ob.add_subparsers(dest="outbox_cmd", required=True)
+    ob_list = ob_sub.add_parser("list", help="every outbox item, as JSON")
+    ob_list.add_argument("--status", default=None)
+    ob_pending = ob_sub.add_parser("pending", help="items waiting to be planned, as JSON")
+    ob_plan = ob_sub.add_parser("plan", help="decide what to send, given the observed Jira state (JSON)")
+    ob_plan.add_argument("from_file", metavar="FILE")
+    ob_ack = ob_sub.add_parser("ack", help="record the results of the sends (JSON)")
+    ob_ack.add_argument("from_file", metavar="FILE")
+    ob_retry = ob_sub.add_parser("retry", help="put a blocked, conflicted, failed, or stuck item back to pending")
+    ob_retry.add_argument("id", type=int)
+    for outbox_parser in (ob_list, ob_pending, ob_plan, ob_ack, ob_retry):
+        outbox_parser.add_argument("--db", default=None, help="SQLite file (default: $WF_DB or ./wf.sqlite)")
+    ob.set_defaults(func=cmd_outbox)
+
+    st = sub.add_parser("status", help="when the board last synced, what is in scope, and what is blocked")
+    st.add_argument("--db", default=None, help="SQLite file (default: $WF_DB or ./wf.sqlite)")
+    st.set_defaults(func=cmd_status)
+
+    mv = sub.add_parser("move", help="move a ticket to an internal stage (the harness or an agent role)")
+    mv.add_argument("key")
+    mv.add_argument("stage")
+    mv.add_argument("--actor", required=True, help="who is moving it, e.g. dev, qa, user")
+    mv.add_argument("--reason", required=True)
+    mv.add_argument("--db", default=None, help="SQLite file (default: $WF_DB or ./wf.sqlite)")
+    mv.set_defaults(func=cmd_move)
+
+    fl = sub.add_parser("flag", help="flag a ticket for a human, or clear a flag (user only)")
+    fl.add_argument("key")
+    fl.add_argument("flag", choices=["needs-human", "blocked"])
+    fl.add_argument("--actor", required=True)
+    fl.add_argument("--reason", default=None)
+    fl.add_argument("--clear", action="store_true", help="clear the flag instead of setting it")
+    fl.add_argument("--db", default=None, help="SQLite file (default: $WF_DB or ./wf.sqlite)")
+    fl.set_defaults(func=cmd_flag)
 
     sp = sub.add_parser("sprints", help="list sprints")
     sp.add_argument("--state", choices=["future", "active", "closed"], default=None)

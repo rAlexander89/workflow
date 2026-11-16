@@ -141,6 +141,24 @@ create table if not exists sync_run (
     error       text
 );
 
+-- Changes waiting to be pushed to Jira by the Jira agent. Each row is sent at most once.
+create table if not exists outbox (
+    id          integer primary key autoincrement,
+    created_at  integer not null,
+    ticket_key  text not null references ticket(key),
+    kind        text not null check (kind in ('transition')),
+    target_stage text not null,
+    actor       text not null,
+    status      text not null check (status in
+                ('pending', 'sending', 'sent', 'skipped', 'blocked', 'conflict', 'failed', 'superseded')),
+    attempts    integer not null default 0,
+    detail      text,
+    jira_response text,
+    updated_at  integer
+);
+create index if not exists outbox_status on outbox (status);
+create index if not exists outbox_ticket on outbox (ticket_key, status);
+
 create view if not exists active_sprint_tickets as
 select t.*, s.name as sprint_name
 from ticket t
@@ -522,3 +540,134 @@ def ticket_detail(conn: sqlite3.Connection, key: str) -> dict | None:
 
 def last_sync(conn: sqlite3.Connection) -> sqlite3.Row | None:
     return conn.execute("select * from sync_run order by id desc limit 1").fetchone()
+
+
+# --- local changes made by the harness and by agents ----------------------------------
+
+FLAGS = ("needs-human", "blocked")
+
+# Who may move a ticket from one internal stage to another. Derived from the agent
+# prompts. The user may move anything. This list is not complete: add a row when a
+# prompt gains a new allowed move. Anything not listed is refused.
+ALLOWED_MOVES: frozenset[tuple[str, str, str]] = frozenset({
+    ("staff", "needs_refinement", "ready_for_dev"),
+    ("staff", "in_refinement", "ready_for_dev"),
+    ("dev", "ready_for_dev", "pr_open"),
+    ("dev", "in_dev", "pr_open"),
+    ("dev", "pr_in_review", "in_dev"),
+    ("dev", "qa_approved", "merged"),
+    ("pr_review", "pr_open", "in_dev"),
+    ("pr_review", "pr_in_review", "in_dev"),
+    ("qa", "ready_for_qa", "qa_approved"),
+    ("qa", "ready_for_qa", "in_dev"),
+    ("qa", "regression", "in_dev"),
+    ("harness", "pr_in_review", "ready_for_qa"),
+})
+
+
+def may_move(actor: str, from_stage: str | None, to_stage: str) -> bool:
+    if actor == "user":
+        return True
+    return (actor, from_stage, to_stage) in ALLOWED_MOVES
+
+
+def move_stage(conn: sqlite3.Connection, key: str, stage: str, actor: str, reason: str,
+               clock: Callable[[], float] = time.time) -> None:
+    """Move a ticket to an internal stage. Only the stage's mapped status is allowed."""
+    if stage not in mapping.STAGES:
+        raise BoardError(f"unknown stage {stage!r}; choose one of {', '.join(mapping.STAGES)}")
+    row = conn.execute("select * from ticket where key = ?", (key,)).fetchone()
+    if row is None:
+        raise BoardError(f"no ticket {key}")
+    if row["removed_at"] is not None:
+        raise BoardError(f"{key} is no longer in scope; it cannot be moved")
+    blocked = conn.execute(
+        "select 1 from stage_mapping where project_key = ? and stage = ? and status_name is null",
+        (row["project_key"], stage),
+    ).fetchone()
+    if blocked:
+        raise BoardError(f"stage {stage!r} is unmapped for {row['project_key']}; it cannot be entered")
+    if row["stage"] == stage:
+        return
+    if not may_move(actor, row["stage"], stage):
+        raise BoardError(
+            f"{actor!r} may not move {key} from {row['stage'] or '(no stage)'} to {stage!r}"
+        )
+    with conn:
+        conn.execute("update ticket set stage = ? where key = ?", (stage, key))
+        _event(conn, key, int(clock()), actor, "stage", row["stage"], stage, reason)
+        enqueue_transition(conn, key, stage, actor, int(clock()))
+
+
+def enqueue_transition(conn: sqlite3.Connection, key: str, stage: str, actor: str, now: int) -> int | None:
+    """Queue a move of the real Jira ticket to the status mapped to `stage`.
+
+    Returns None when the stage has no mapped Jira status (nothing to push). A newer
+    move supersedes older pending moves for the same ticket.
+    """
+    row = conn.execute("select project_key from ticket where key = ?", (key,)).fetchone()
+    target = conn.execute(
+        "select status_name from stage_mapping where project_key = ? and stage = ? and status_name is not null",
+        (row["project_key"], stage),
+    ).fetchone()
+    if target is None:
+        return None
+    cur = conn.execute(
+        "insert into outbox (created_at, ticket_key, kind, target_stage, actor, status) "
+        "values (?, ?, 'transition', ?, ?, 'pending')",
+        (now, key, stage, actor),
+    )
+    conn.execute(
+        "update outbox set status = 'superseded', updated_at = ? "
+        "where ticket_key = ? and kind = 'transition' and status = 'pending' and id != ?",
+        (now, key, cur.lastrowid),
+    )
+    return cur.lastrowid
+
+
+def set_flag(conn: sqlite3.Connection, key: str, flag: str, actor: str, reason: str,
+             clock: Callable[[], float] = time.time) -> None:
+    """Flag a ticket for a human. Agents set flags. Only the user clears them."""
+    if flag not in FLAGS:
+        raise BoardError(f"flag must be one of {FLAGS}")
+    row = conn.execute("select flags from ticket where key = ?", (key,)).fetchone()
+    if row is None:
+        raise BoardError(f"no ticket {key}")
+    flags = json.loads(row["flags"])
+    if flag in flags:
+        return
+    flags.append(flag)
+    with conn:
+        conn.execute("update ticket set flags = ? where key = ?", (json.dumps(flags), key))
+        _event(conn, key, int(clock()), actor, "flag", None, flag, reason)
+
+
+def clear_flag(conn: sqlite3.Connection, key: str, flag: str, actor: str,
+               clock: Callable[[], float] = time.time) -> None:
+    """Clear a flag. Only the user can do this."""
+    if actor != "user":
+        raise BoardError("only the user can clear a flag")
+    row = conn.execute("select flags from ticket where key = ?", (key,)).fetchone()
+    if row is None:
+        raise BoardError(f"no ticket {key}")
+    flags = json.loads(row["flags"])
+    if flag not in flags:
+        return
+    flags.remove(flag)
+    with conn:
+        conn.execute("update ticket set flags = ? where key = ?", (json.dumps(flags), key))
+        _event(conn, key, int(clock()), actor, "unflag", flag, None, None)
+
+
+def status(conn: sqlite3.Connection, now: float) -> dict:
+    """What the board knows: when it last synced, what is in scope, and what is blocked."""
+    run = last_sync(conn)
+    return {
+        "last_sync": dict(run) if run else None,
+        "age_seconds": None if run is None or run["finished_at"] is None else int(now) - run["finished_at"],
+        "active_tickets": conn.execute("select count(*) from active_sprint_tickets").fetchone()[0],
+        "backlog_tickets": conn.execute("select count(*) from backlog_tickets").fetchone()[0],
+        "flagged": [dict(r) for r in conn.execute(
+            "select key, flags from ticket where flags != '[]' and removed_at is null order by key")],
+        "unmapped_stages": [dict(r) for r in unmapped_stages(conn)],
+    }

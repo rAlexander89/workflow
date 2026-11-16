@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Outbox{% endblock %}
+{% block content %}
+<h1>Jira outbox</h1>
+<p class="muted">Stage moves queued for the real Jira board. The Jira agent sends them from your Claude session.</p>
+<ul>
+  {% for i in items %}
+  <li>
+    <span><a href="/board/ticket/{{ i.ticket_key }}">{{ i.ticket_key }}</a> → {{ i.target_stage }}
+      <span class="muted">{{ i.status }}{% if i.attempts %} · attempts {{ i.attempts }}{% endif %}</span></span>
+    <span class="muted">{{ i.detail or '' }}</span>
+    {% if i.status in retryable %}
+    <form method="post" action="/board/outbox/{{ i.id }}/retry"><button>Retry</button></form>
+    {% endif %}
+  </li>
+  {% else %}
+  <li class="muted">Nothing queued.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

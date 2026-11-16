@@ -1,0 +1,17 @@
+{% for stage, tickets in groups %}
+<h2>{{ stage }} <span class="muted">{{ tickets|length }}</span></h2>
+<ul>
+  {% for t in tickets %}
+  <li>
+    <span>
+      <a href="/board/ticket/{{ t.key }}"><strong>{{ t.key }}</strong></a>
+      {{ t.summary }}
+      <span class="muted">· {{ t.jira_status }}{% if t.sprint_name %} · {{ t.sprint_name }}{% endif %}</span>
+    </span>
+    {% if t.flags and t.flags != '[]' %}<span class="error">flagged: {{ t.flags }}</span>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">No tickets.</p>
+{% endfor %}

@@ -37,6 +37,9 @@
 </head>
 <body>
   <nav>
+    <a href="/board" class="{% if active == 'board' %}on{% endif %}">Sprint</a>
+    <a href="/board/backlog" class="{% if active == 'backlog' %}on{% endif %}">Backlog</a>
+    <a href="/board/outbox" class="{% if active == 'outbox' %}on{% endif %}">Outbox</a>
     <a href="/runs" class="{% if active == 'runs' %}on{% endif %}">Runs</a>
     <a href="/links" class="{% if active == 'links' %}on{% endif %}">Links</a>
   </nav>

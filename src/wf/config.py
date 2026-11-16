@@ -28,7 +28,8 @@ def default_path() -> Path:
 @dataclass(frozen=True)
 class RepoLink:
     name: str  # the internal repo's name, e.g. "api"
-    path: str  # where the internal bare repo lives on this machine
+    path: str  # where the repo lives on this machine
+    remote: str = ""  # the org/repo it pushes to later, e.g. "acme/api"; empty if unknown
 
 
 @dataclass(frozen=True)
@@ -57,7 +58,7 @@ class Config:
 
     # --- repos -------------------------------------------------------------
 
-    def add_repo(self, name: str, path: str) -> bool:
+    def add_repo(self, name: str, path: str, remote: str = "") -> bool:
         """Returns False if a repo with this name is already linked."""
         name = name.strip()
         path = path.strip()
@@ -67,7 +68,7 @@ class Config:
             raise ConfigError("repo path must not be empty")
         if any(r.name == name for r in self.repos):
             return False
-        self.repos.append(RepoLink(name, path))
+        self.repos.append(RepoLink(name, path, remote.strip()))
         return True
 
     def remove_repo(self, name: str) -> bool:
@@ -98,7 +99,7 @@ class Config:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "repos": [{"name": r.name, "path": r.path} for r in self.repos],
+            "repos": [{"name": r.name, "path": r.path, "remote": r.remote} for r in self.repos],
             "boards": [{"provider": b.provider, "ref": b.ref, "label": b.label} for b in self.boards],
             "model": asdict(self.model),
         }
@@ -107,7 +108,7 @@ class Config:
     def from_dict(cls, data: dict[str, Any]) -> "Config":
         cfg = cls()
         for r in data.get("repos", []):
-            cfg.add_repo(r["name"], r["path"])
+            cfg.add_repo(r["name"], r["path"], r.get("remote", ""))
         for b in data.get("boards", []):
             cfg.add_board(b["provider"], b["ref"], b.get("label", ""))
         if "model" in data:

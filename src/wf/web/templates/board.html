@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Active sprint</h1>
+<p class="muted">{{ total }} tickets. {% if sync.run %}Last sync: {{ sync.run.kind }} {{ sync.run.status }}, {{ sync.age_text }}.{% else %}Never synced.{% endif %}
+  {% if sync.stale %}<span class="error">The board is more than a day old. Sync from your Claude session.</span>{% endif %}
+  {% if sync.pending %}{{ sync.pending }} change(s) waiting for Jira.{% endif %}</p>
+{% if sync.run and sync.run.status == 'failed' %}<p class="error">Last sync failed: {{ sync.run.error }}</p>{% endif %}
+{% if blocked %}
+<h2>Blocked stages</h2>
+<ul>{% for b in blocked %}<li><span>{{ b.project_key }} · {{ b.stage }}</span><span class="muted">{{ b.reason }}</span></li>{% endfor %}</ul>
+{% endif %}
+{% include "_stages.html" %}
+{% endblock %}

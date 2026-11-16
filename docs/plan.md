@@ -24,8 +24,25 @@ one product.
 | Branches, internal PRs, merges | Internal git repos | Written by agents, through the gateway |
 | Runs, events, token use | SQLite | Written by the harness |
 
-Nothing is written back to Jira. Jira's status is shown on the board as a read-only
-mirror.
+Jira's status is shown on the board as a mirror. Internal agents never reach outside the
+internal board. Only two bots reach outside it:
+
+- **The Jira agent** is the only component that writes to Jira. It pulls tickets in, and
+  it pushes board changes out (for example, moving the real ticket from In Progress to In
+  Review once the internal stage changes).
+  - It acts through the user's Atlassian MCP connection, so writes show as the user.
+  - It writes without asking for approval.
+  - Its scope is any interaction with tickets assigned to the user: status transitions,
+    comments, and field updates. It does not touch tickets assigned to anyone else.
+  - Before each write it checks the ticket's current Jira status, sends only a transition
+    Jira allows from there, and records Jira's response so retries can't apply a change
+    twice.
+- **The GitHub agent** is the only component that writes to the org's repositories. It
+  opens a real pull request only after the work has passed the whole internal pipeline:
+  research, development, review, QA, performance, and sprint regression. Until then the
+  work stays on the internal board and in the internal repos.
+
+Everything else works only inside the internal board and the internal repos.
 
 ## 3. Discovery
 
@@ -92,7 +109,8 @@ Each role has a prompt in `prompts/`:
 | QA | Tests each ticket and the sprint regression. Second approval. |
 | Performance | Tests performance ideas on branches, before code is pushed out. |
 
-Agents never write to Jira and never push to the org's hosting.
+Internal agents never write to Jira and never push to the org's hosting. Only the Jira
+agent and the GitHub agent do, as described in section 2.
 
 Prompts are generic. The project's own rules come from its configuration and from the
 repo's AI instructions file.
@@ -106,8 +124,9 @@ repo's AI instructions file.
 - A branch merges into the internal `main` after both reviews pass. The merge rule is
   checked by the harness: two approvals from two different roles, on the current head,
   with no open threads and passing tests.
-- **Open:** when code is pushed to the org's hosting. Options are on every merge into the
-  internal `main`, or once per sprint after the sprint regression passes.
+- **Decided:** the GitHub agent opens a real pull request on the org's hosting only after
+  the work has passed the whole internal pipeline, including performance and sprint
+  regression (section 2).
 
 ## 8. Models and access
 
@@ -139,16 +158,31 @@ The container runner and the Linux runtime are not built yet.
 1. Done: the board schema in SQLite, and the sync payload from the session (`docs/sync-format.md`).
 2. Done: automatic status mapping (`src/wf/mapping.py`). Unmapped stages are blocked, and
    routing uses the mapping in place of the old fixed status table.
-3. Not yet: the boot check for the Atlassian MCP. `wf doctor` does not check it.
+3. Partly done: `wf status` reports when the board last synced, whether it's stale, and
+   what is blocked. The MCP connection itself can only be checked inside the Claude
+   session, so the session checks it before it runs a sync.
 4. Done: remove project-specific code and docs.
-5. Done: the sprint board. `wf sync`, `wf board`, and `wf sprints` work against the payload.
-   Stage moves by agents are not built yet.
+5. Done: the sprint board. `wf sync`, `wf board`, `wf backlog`, and `wf sprints` work
+   against the payload. `wf move` lets the harness or an agent role move a ticket to a
+   mapped stage, and every move is logged. `wf flag` lets agents flag a ticket for a
+   human, and only the user can clear a flag.
 6. Not yet: gateway tools for agents, then the run loop.
+7. Done: the Jira outbox (`src/wf/outbox.py`, `docs/outbox.md`). Stage moves are queued in
+   SQLite. The Jira agent plans them against the observed Jira state, sends at most once,
+   and records each result. Comments and field updates are not built yet.
+8. Done: the board UI (`src/wf/web/board_views.py`). Pages for the active sprint, the
+   backlog, one ticket, and the Jira outbox. The user can clear flags and retry outbox
+   items there. Agents don't use these pages. The gateway will call `move` and
+   `flag` on behalf of an agent, and check its role first.
 
 ## 11. Open items
 
-- Push trigger to the org's hosting (section 7).
 - Whether agents may create tickets on the board, and how those stay off the sync.
 - How to handle a ticket that changes in Jira while an agent works on it.
 - Whether a ticket can belong to two open sprints.
 - Scheduled sync, which needs a Jira API token on the harness.
+- **Allowed moves per role.** The table of (role, from-stage, to-stage) is in
+  `src/wf/board.py` (`ALLOWED_MOVES`) and is enforced when a move is made. It was derived
+  from the agent prompts and is not a complete list of guardrails. It is expected to grow
+  as the project does. The actor is still a label the caller gives, so the gateway must
+  set it before any agent connects.

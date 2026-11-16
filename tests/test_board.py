@@ -318,3 +318,145 @@ def test_cli_backlog_lists_tickets(tmp_path, capsys):
     assert cli.main(["backlog", "--db", db]) == 0
     out = capsys.readouterr().out
     assert "ABC-5" in out and "ready_for_dev" not in out
+
+
+# --- harness moves, flags, and status ---------------------------------------------
+
+def test_move_stage_to_a_mapped_stage_is_logged(conn):
+    sync(conn, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
+    board.move_stage(conn, "ABC-1", "pr_open", actor="dev", reason="opened PR", clock=clock)
+    assert ticket_row(conn, "ABC-1")["stage"] == "pr_open"
+    last = board.ticket_detail(conn, "ABC-1")["events"][-1]
+    assert (last["kind"], last["actor"], last["from_value"], last["to_value"]) == (
+        "stage", "dev", "ready_for_dev", "pr_open")
+
+
+def test_move_to_a_blocked_stage_is_refused(conn):
+    sync(conn, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
+    with pytest.raises(board.BoardError, match="unmapped"):
+        board.move_stage(conn, "ABC-1", "regression", actor="qa", reason="x", clock=clock)
+    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_dev"
+
+
+def test_move_rejects_unknown_stage_removed_ticket_and_missing_ticket(conn):
+    sync(conn, payload(tickets=[ticket("ABC-1")]))
+    with pytest.raises(board.BoardError, match="unknown stage"):
+        board.move_stage(conn, "ABC-1", "nowhere", actor="dev", reason="x", clock=clock)
+    with pytest.raises(board.BoardError, match="no ticket"):
+        board.move_stage(conn, "ABC-404", "pr_open", actor="dev", reason="x", clock=clock)
+    sync(conn, payload(tickets=[]))
+    with pytest.raises(board.BoardError, match="no longer in scope"):
+        board.move_stage(conn, "ABC-1", "pr_open", actor="dev", reason="x", clock=clock)
+
+
+def test_agents_can_flag_but_only_the_user_can_clear(conn):
+    sync(conn, payload(tickets=[ticket("ABC-1")]))
+    board.set_flag(conn, "ABC-1", "needs-human", actor="dev", reason="scope unclear", clock=clock)
+    assert json.loads(ticket_row(conn, "ABC-1")["flags"]) == ["needs-human"]
+    with pytest.raises(board.BoardError, match="only the user"):
+        board.clear_flag(conn, "ABC-1", "needs-human", actor="dev", clock=clock)
+    board.clear_flag(conn, "ABC-1", "needs-human", actor="user", clock=clock)
+    assert json.loads(ticket_row(conn, "ABC-1")["flags"]) == []
+
+
+def test_flags_show_in_status(conn):
+    sync(conn, payload(tickets=[ticket("ABC-1")]))
+    board.set_flag(conn, "ABC-1", "blocked", actor="qa", reason="env down", clock=clock)
+    s = board.status(conn, NOW)
+    assert [f["key"] for f in s["flagged"]] == ["ABC-1"]
+
+
+def test_status_reports_age_and_blocked_stages(conn):
+    assert board.status(conn, NOW)["last_sync"] is None
+    sync(conn, payload(tickets=[ticket("ABC-1")]))
+    s = board.status(conn, NOW + 3600)
+    assert s["age_seconds"] == 3600 and s["active_tickets"] == 1
+    assert any(u["stage"] == "regression" for u in s["unmapped_stages"])
+
+
+def test_cli_status_flags_a_stale_board(tmp_path, capsys):
+    db = str(tmp_path / "wf.sqlite")
+    f = tmp_path / "sync.json"
+    f.write_text(json.dumps(payload(tickets=[ticket("ABC-1")])))
+    cli.main(["sync", str(f), "--db", db])
+    capsys.readouterr()
+    cli.main(["status", "--db", db])  # real clock: the sync just happened
+    assert "stale" not in capsys.readouterr().out
+
+
+def test_cli_move_and_flag(tmp_path, capsys):
+    db = str(tmp_path / "wf.sqlite")
+    f = tmp_path / "sync.json"
+    f.write_text(json.dumps(payload(tickets=[ticket("ABC-1", status="Ready for dev")])))
+    cli.main(["sync", str(f), "--db", db])
+    capsys.readouterr()
+    assert cli.main(["move", "ABC-1", "pr_open", "--actor", "dev", "--reason", "opened PR", "--db", db]) == 0
+    assert cli.main(["move", "ABC-1", "regression", "--actor", "qa", "--reason", "x", "--db", db]) == 2
+    assert cli.main(["flag", "ABC-1", "needs-human", "--actor", "dev", "--reason", "unclear", "--db", db]) == 0
+    assert cli.main(["flag", "ABC-1", "needs-human", "--actor", "dev", "--clear", "--db", db]) == 2
+    assert cli.main(["flag", "ABC-1", "needs-human", "--actor", "user", "--clear", "--db", db]) == 0
+    assert "error" in capsys.readouterr().err
+
+
+# --- who may move what --------------------------------------------------------------
+
+def _at(conn, key, stage):
+    conn.execute("update ticket set stage = ? where key = ?", (stage, key))
+    conn.commit()
+
+
+WIDE_STATUSES = STATUSES + [
+    {"name": "PR in review", "category": "indeterminate"},
+    {"name": "Ready for QA", "category": "indeterminate"},
+    {"name": "QA approved", "category": "indeterminate"},
+    {"name": "Merged to main", "category": "indeterminate"},
+]
+
+
+def wide(**parts):
+    """A payload whose project maps every stage the policy talks about."""
+    return payload(projects=[{"key": "ABC", "name": "Example", "statuses": WIDE_STATUSES}], **parts)
+
+
+def test_allowed_agent_moves_go_through(conn):
+    sync(conn, wide(tickets=[ticket("ABC-1", status="Ready for dev")]))
+    board.move_stage(conn, "ABC-1", "pr_open", actor="dev", reason="PR opened", clock=clock)
+    _at(conn, "ABC-1", "pr_in_review")
+    board.move_stage(conn, "ABC-1", "ready_for_qa", actor="harness", reason="approvals clear", clock=clock)
+    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_qa"
+
+
+def test_agent_move_outside_its_table_is_refused(conn):
+    sync(conn, wide(tickets=[ticket("ABC-1", status="Ready for dev")]))
+    _at(conn, "ABC-1", "ready_for_qa")
+    with pytest.raises(board.BoardError, match="may not move"):
+        board.move_stage(conn, "ABC-1", "qa_approved", actor="dev", reason="x", clock=clock)
+    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_qa"
+
+
+def test_skipping_review_is_refused_for_every_agent(conn):
+    sync(conn, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
+    for actor in ("dev", "qa", "staff", "product", "performance", "pr_review"):
+        with pytest.raises(board.BoardError):
+            board.move_stage(conn, "ABC-1", "merged", actor=actor, reason="x", clock=clock)
+    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_dev"
+
+
+def test_product_and_performance_move_no_stages(conn):
+    sync(conn, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
+    for actor in ("product", "performance"):
+        with pytest.raises(board.BoardError, match="may not move"):
+            board.move_stage(conn, "ABC-1", "pr_open", actor=actor, reason="x", clock=clock)
+
+
+def test_user_can_move_anywhere_mapped(conn):
+    sync(conn, wide(tickets=[ticket("ABC-1", status="Ready for dev")]))
+    board.move_stage(conn, "ABC-1", "pr_open", actor="user", reason="my call", clock=clock)
+    board.move_stage(conn, "ABC-1", "merged", actor="user", reason="my call", clock=clock)
+    assert ticket_row(conn, "ABC-1")["stage"] == "merged"
+
+
+def test_unknown_actor_is_refused(conn):
+    sync(conn, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
+    with pytest.raises(board.BoardError, match="may not move"):
+        board.move_stage(conn, "ABC-1", "pr_open", actor="some-bot", reason="x", clock=clock)

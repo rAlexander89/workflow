@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Backlog{% endblock %}
+{% block content %}
+<h1>Backlog</h1>
+<p class="muted">{{ total }} tickets in no sprint. {% if sync.run %}Last sync: {{ sync.run.kind }} {{ sync.run.status }}, {{ sync.age_text }}.{% else %}Never synced.{% endif %}</p>
+{% include "_stages.html" %}
+{% endblock %}

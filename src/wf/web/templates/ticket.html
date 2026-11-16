@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ ticket.key }}{% endblock %}
+{% block content %}
+<h1>{{ ticket.key }} · {{ ticket.summary }}</h1>
+<p class="muted">{{ ticket.project_key }} · {{ ticket.issue_type or 'issue' }} · Jira: {{ ticket.jira_status }}
+  · stage: {{ ticket.stage or '(none)' }} · sprint: {{ ticket.sprint_id or 'backlog' }}
+  {% if ticket.removed_at %}· <span class="error">no longer in scope</span>{% endif %}</p>
+
+{% if ticket.description %}<h2>Description</h2><p style="white-space:pre-wrap">{{ ticket.description }}</p>{% endif %}
+{% if ticket.acceptance %}<h2>Acceptance criteria</h2><p style="white-space:pre-wrap">{{ ticket.acceptance }}</p>{% endif %}
+
+<h2>Flags</h2>
+{% if ticket.flag_list %}
+<ul>{% for f in ticket.flag_list %}
+  <li><span class="error">{{ f }}</span>
+    <form method="post" action="/board/ticket/{{ ticket.key }}/flag/clear">
+      <input type="hidden" name="flag" value="{{ f }}"><button class="danger">Clear</button>
+    </form></li>
+{% endfor %}</ul>
+{% else %}<p class="muted">None.</p>{% endif %}
+
+<h2>Jira outbox</h2>
+<ul>{% for o in outbox_items %}
+  <li><span>{{ o.target_stage }} <span class="muted">{{ o.status }}</span></span><span class="muted">{{ o.detail or '' }}</span></li>
+{% else %}<li class="muted">Nothing queued.</li>{% endfor %}</ul>
+
+<h2>Comments</h2>
+<ul>{% for c in comments %}
+  <li><span><strong>{{ c.author }}</strong> <span class="muted">({{ c.origin }})</span> {{ c.body }}</span></li>
+{% else %}<li class="muted">No comments synced.</li>{% endfor %}</ul>
+
+<h2>History</h2>
+<ul>{% for e in events %}
+  <li><span>{{ e.kind }} · {{ e.actor }}{% if e.from_value or e.to_value %} · {{ e.from_value or '' }} → {{ e.to_value or '' }}{% endif %}</span>
+    <span class="muted">{{ e.detail or '' }}</span></li>
+{% endfor %}</ul>
+{% endblock %}

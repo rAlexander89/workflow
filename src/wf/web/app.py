@@ -191,4 +191,7 @@ def create_app(
             run = runs.get(run_id)
         return render(request, "_run_status.html", run=run, snap=snap)
 
+    from wf.web.board_views import mount_board
+
+    mount_board(app, db_path)
     return app

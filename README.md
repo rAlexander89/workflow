@@ -34,6 +34,15 @@ pip install -e ".[dev]"
 python -m pytest
 ```
 
+New here? Run `wf init`. It asks you to connect the Atlassian MCP in Claude Code, then looks
+at the git repos under the folders you name. It lists the ones you commit to most, with the
+org/repo each pushes to, and you pick the ones to link.
+
+```bash
+wf init --root ~/code              # interactive
+wf init --mcp-connected --root ~/code --pick 1,3   # scripted
+```
+
 Commands that exist now:
 
 ```bash
@@ -48,7 +57,20 @@ wf board                           # the active sprint, grouped by stage
 wf backlog                         # your backlog (tickets in no sprint), grouped by stage
 wf sprints --state active          # list sprints
 wf route "Ready for dev"           # which owner a Jira status routes to
+wf status                          # when the board last synced, and what is blocked
+wf move ABC-1 pr_open --actor dev --reason "opened PR"   # move a ticket to a mapped stage
+wf flag ABC-1 needs-human --actor dev --reason "scope unclear"
+wf flag ABC-1 needs-human --actor user --clear           # only the user clears a flag
 ```
+
+To look at the board in a browser:
+
+```bash
+WF_DB=wf.sqlite WF_CONFIG=workflow.json python -m uvicorn --factory wf.web.app:create_app --port 8000
+```
+
+Then open http://127.0.0.1:8000/board. Pages: the active sprint, the backlog, each ticket,
+and the Jira outbox.
 
 `wf sync` takes the JSON payload that the Claude session builds from the Atlassian MCP.
 See `docs/sync-format.md`.

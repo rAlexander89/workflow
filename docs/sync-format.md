@@ -7,7 +7,8 @@ queries and passes the results to the tool as one JSON file:
 wf sync payload.json --db wf.sqlite
 ```
 
-Jira is read-only. The payload is never written back.
+This payload only brings data in. Writes to Jira are the job of the Jira agent, which is
+separate from the sync (see `docs/plan.md`, section 2).
 
 ## Shape
 
