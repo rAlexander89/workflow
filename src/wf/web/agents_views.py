@@ -132,19 +132,17 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
     def agents_page(request: Request):
         return page(request, **context())
 
-    @app.post("/agents/tick")
-    def run_pass(request: Request):
-        c = settings()
+    def pass_work(c):
         access = c.model.claude_code_access
-        repos = c.repos
 
         def work():
             conn = board.connect(db_path)
             try:
                 actions = agents.tick(
                     conn, repo=_repo_path(c, None), runs_dir=_runs_dir(c), access=access,
-                    model=c.agents.model, test_cmd=c.agents.test_cmd, app_cmd=c.agents.app_cmd, app_url=c.agents.app_url, bot_domain=c.bots.domain if c.bots.enabled else "", bot_credentials=c.bots.credentials_file, dry_run=False,
-                    claude_bin=_claude_bin(),
+                    model=c.agents.model, test_cmd=c.agents.test_cmd, app_cmd=c.agents.app_cmd,
+                    app_url=c.agents.app_url, bot_domain=c.bots.domain if c.bots.enabled else "",
+                    bot_credentials=c.bots.credentials_file, dry_run=False, claude_bin=_claude_bin(),
                 )
                 for a in actions:
                     _log(f"{a['key']}: {a['role']} on {a['stage']}"
@@ -153,12 +151,45 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                     _log("nothing to run: no ticket is waiting for an agent")
             finally:
                 conn.close()
+        return work
 
-        if not repos:
+    def ready_work(c) -> bool:
+        conn = board.connect(db_path)
+        try:
+            actions = agents.tick(conn, repo=_repo_path(c, None), runs_dir=_runs_dir(c),
+                                  access=c.model.claude_code_access, model=c.agents.model, dry_run=True)
+        except Exception:
+            return False
+        finally:
+            conn.close()
+        return any(not a.get("skipped") for a in actions)
+
+    @app.post("/agents/tick")
+    def run_pass(request: Request):
+        c = settings()
+        if not c.repos:
             _log("no repo is linked: add one on the Links page first")
-        elif not _start("one pass", work):
+        elif not _start("one pass", pass_work(c)):
             _log("a pass is already running")
         return RedirectResponse("/agents", status_code=303)
+
+    def auto_loop():
+        """Start the next pass by itself when a ticket is ready, e.g. right after its flag clears."""
+        while True:
+            time.sleep(15)
+            try:
+                c = settings()
+                if not (c.agents.auto_run and c.repos and c.model.claude_code_access):
+                    continue
+                with _lock:
+                    if _state["running"]:
+                        continue
+                if ready_work(c):
+                    _start("auto pass", pass_work(c))
+            except Exception as e:  # never let the loop die
+                _log(f"auto pass check failed: {e}")
+
+    threading.Thread(target=auto_loop, daemon=True).start()
 
     @app.post("/agents/run/{key}")
     def run_one(key: str):
