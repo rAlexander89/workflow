@@ -245,9 +245,9 @@ def _set_stage(conn, stage):
 def test_merged_goes_to_regression_only_after_the_github_merge(conn, repo, tmp_path):
     _branch_with_change(repo, tmp_path)
     _set_stage(conn, "merged")
-    assert agents.advance_pipeline(conn, repo=repo, pr_merged=lambda k: False) == []
+    assert agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: False) == []
     assert ticket_row(conn, "ABC-1")["stage"] == "merged"
-    assert agents.advance_pipeline(conn, repo=repo, pr_merged=lambda k: True) == ["ABC-1"]
+    assert agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: True) == ["ABC-1"]
     assert ticket_row(conn, "ABC-1")["stage"] == "regression"
 
 
@@ -255,7 +255,7 @@ def test_regression_pass_waits_for_a_person_to_deploy(conn, repo, tmp_path):
     wt = _branch_with_change(repo, tmp_path)
     _set_stage(conn, "regression")
     board.record_approval(conn, "ABC-1", "qa", agents.head_of(wt), clock=clock)
-    agents.advance_pipeline(conn, repo=repo, pr_merged=lambda k: True)
+    agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: True)
     assert ticket_row(conn, "ABC-1")["stage"] == "regression"
     assert agents.prod_ready(conn, "ABC-1", repo)
 
@@ -265,7 +265,7 @@ def test_regression_pass_goes_to_performance_when_the_dev_asked(conn, repo, tmp_
     _set_stage(conn, "regression")
     board.request_perf_check(conn, "ABC-1", "dev", "changes a hot path")
     board.record_approval(conn, "ABC-1", "qa", agents.head_of(wt), clock=clock)
-    agents.advance_pipeline(conn, repo=repo, pr_merged=lambda k: True)
+    agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: True)
     assert ticket_row(conn, "ABC-1")["stage"] == "performance"
     assert not agents.prod_ready(conn, "ABC-1", repo)  # performance still has to pass
 

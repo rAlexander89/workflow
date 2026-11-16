@@ -226,7 +226,7 @@ def prod_ready(conn: sqlite3.Connection, key: str, repo: Path) -> bool:
     return True
 
 
-def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, pr_merged=None) -> list[str]:
+def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, dev_deployed=None) -> list[str]:
     """Move tickets along the steps that need no agent judgement. Returns the keys moved.
 
     - an approval at the branch head is the review, so the ticket goes on to QA
@@ -235,13 +235,10 @@ def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, pr_merged=None) ->
     - a regression pass goes to performance if the dev asked for a check
     Deploying to prod is a person's step; nothing here moves a ticket past regression.
     """
-    from wf import github_status
+    from wf import observe
 
-    if pr_merged is None:
-        def pr_merged(key):
-            row = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'pr' "
-                               "order by id desc limit 1", (key,)).fetchone()
-            return bool(row) and github_status.pr_status(row[0]).get("merged", False)
+    if dev_deployed is None:
+        dev_deployed = lambda key: observe.dev_deployed(conn, key)  # noqa: E731
     ensure_schema(conn)
     moved: list[str] = []
     rows = conn.execute(
@@ -250,8 +247,8 @@ def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, pr_merged=None) ->
     for row in rows:
         key, stage = row["key"], row["stage"]
         if stage == "merged":
-            if pr_merged(key):
-                board.move_stage(conn, key, "regression", "harness", "PR merged on GitHub; regression on dev")
+            if dev_deployed(key):
+                board.move_stage(conn, key, "regression", "harness", "deployed to dev; regression on dev")
                 moved.append(key)
             continue
         if stage == "regression":

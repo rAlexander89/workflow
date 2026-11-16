@@ -120,6 +120,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             pr_url = (c.execute("select detail from ticket_event where ticket_key=? and kind='pr' "
                                 "order by id desc limit 1", (key,)).fetchone() or [None])[0]
             from wf import github_status as _gh
+            from wf import observe as _observe
 
             def agents_prod_ready(conn, k):
                 try:
@@ -139,6 +140,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
                             last_run_failed=bool(runs and (runs[0]["exit_code"] != 0 or runs[0]["timed_out"])),
                             perf_requested=board.perf_requested(c, key),
                             pr_url=pr_url, pr_merged=gh.get("merged", False),
+                            dev_deployed=_observe.dev_deployed(c, key), prod_deployed=_observe.prod_deployed(c, key),
                             pr_checks=gh.get("checks", "none"), pr_closed=gh.get("ok") and gh.get("state") == "CLOSED",
                             flagged=bool(t["flag_list"]),
                             prod_ready=bool(t["stage"] in ("regression", "performance") and

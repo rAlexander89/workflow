@@ -73,6 +73,13 @@ def _repo_path(c, name: str | None) -> Path:
     return Path(repos[name].path)
 
 
+def _repo_slug(c) -> str:
+    repos = c.repos
+    if not repos or not repos[0].remote:
+        raise board.BoardError("the linked repo has no GitHub remote (org/repo) set")
+    return repos[0].remote
+
+
 def _runs_dir(c) -> Path:
     return Path(os.path.expanduser(c.agents.runs_dir)).resolve()
 
@@ -141,6 +148,22 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             try:
                 for key in agents.advance_pipeline(conn, repo=_repo_path(c, None)):
                     _log(f"{key}: moved on by the harness")
+                from wf import observe
+                for key in [r["key"] for r in conn.execute(
+                        "select key from ticket where stage = 'merged' and removed_at is null").fetchall()]:
+                    if observe.latest(conn, key, "merge:") is None:
+                        sha = observe.merge_sha(conn, key, _repo_slug(c))
+                        if sha:
+                            _log(f"{key}: merged to main at {sha[:8]}")
+                    state = observe.observe_dev(conn, key, _repo_slug(c))
+                    if state == "success":
+                        _log(f"{key}: deployed to dev")
+                    elif state == "failed":
+                        _log(f"{key}: dev deploy FAILED")
+                for key in [r["key"] for r in conn.execute(
+                        "select key from ticket where stage = 'deployed' and removed_at is null").fetchall()]:
+                    if observe.observe_prod(conn, key, _repo_slug(c)) == "success":
+                        _log(f"{key}: deployed to prod (observed)")
                 actions = agents.tick(
                     conn, repo=_repo_path(c, None), runs_dir=_runs_dir(c), access=access,
                     model=c.agents.model, test_cmd=c.agents.test_cmd, app_cmd=c.agents.app_cmd,
@@ -246,6 +269,10 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         try:
             if not agents.prod_ready(conn, key, _repo_path(c, None)):
                 _log(f"{key}: deploy refused: regression has not passed on the current commit")
+                return RedirectResponse("/agents", status_code=303)
+            from wf import observe
+            if not observe.start_prod_deploy(conn, key, _repo_slug(c)):
+                _log(f"{key}: deploy refused: the prod workflow could not be started")
                 return RedirectResponse("/agents", status_code=303)
             board.move_stage(conn, key, "deployed", "user", "deployed to prod by the user")
             _log(f"{key} deployed to prod (by you)")
@@ -384,10 +411,20 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         finally:
             conn.close()
         summary = _html.escape(stat[-1]) if stat else "no changes against main"
+        from wf import merge_bot as _mb
+        conn2 = board.connect(db_path)
+        try:
+            verdict = _mb.assess(conn2, key, repo=_repo_path(c, None))
+        finally:
+            conn2.close()
+        verdict_html = ('<div class="item"><b class="ok">Merge bot: good to merge</b></div>' if verdict.ok else
+                        '<div class="item"><b class="bad">Merge bot: not good to merge</b><ul>'
+                        + "".join(f"<li>{_html.escape(r)}</li>" for r in verdict.reasons) + "</ul></div>")
         approved = ", ".join(approvals) if approvals else "none at this commit"
         body = f"""<div class="panel"><div class="row between"><b>{_html.escape(branch)}</b>
 <span class="muted">{head[:10]}</span></div>
 <div class="item">Changes: {summary}</div>
+{verdict_html}
 <div class="item">Approved at this commit: {_html.escape(approved)}</div>
 <div class="item">Last dev run: {"ok" if tests and tests[0] == 0 else "not ok" if tests else "none"}</div>
 <div class="item"><a href="/board/ticket/{_html.escape(key)}/diff" target="_blank">View the diff</a></div>

@@ -60,7 +60,8 @@ _ORDER = [stage for _, _, stage in FLOW if stage]
 
 def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: bool,
                 pr_url: str | None, pr_merged: bool, pr_checks: str = "none", pr_closed: bool = False,
-                prod_ready: bool = False, flagged: bool = False) -> list[dict]:
+                prod_ready: bool = False, flagged: bool = False, dev_deployed: bool = False,
+                prod_deployed: bool = False) -> list[dict]:
     """Each step with its state: done (green), current (yellow), failed (red), skipped, or todo.
 
     A step is failed only where the ticket is now and its last agent run failed. Performance is
@@ -85,7 +86,7 @@ def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: boo
         elif key == "main":
             state = "done" if pr_merged else "todo"
         elif key == "dev":
-            state = "done" if (stage in ("regression", "performance", "deployed")) else "todo"
+            state = "done" if (dev_deployed or stage in ("regression", "performance", "deployed")) else "todo"
         elif key == "dev_work":
             if stage == "in_dev":
                 state = "failed" if (flagged or last_run_failed) else "current"
@@ -106,6 +107,6 @@ def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: boo
         elif at is not None and stage == "deployed":
             state = "done"
         if key == "prod":
-            state = "done" if stage == "deployed" else ("current" if prod_ready else "todo")
+            state = "done" if prod_deployed else ("current" if (stage == "deployed" or prod_ready) else "todo")
         out.append({"key": key, "label": label, "state": state})
     return out
