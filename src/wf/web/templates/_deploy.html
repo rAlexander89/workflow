@@ -1,0 +1,16 @@
+{% if deploy %}
+<div class="row between"><b>{{ deploy.name }}</b>
+  <a href="{{ deploy.url }}" target="_blank">open the run</a></div>
+<div class="graph">
+  {% for j in deploy.jobs %}
+  <a class="jnode {{ j.state }}" href="{{ j.url }}" target="_blank">
+    <span class="jdot"></span>{{ j.name }}
+    <span class="jstate">{{ j.state }}</span>
+  </a>
+  {% if not loop.last %}<span class="jarrow">&#8594;</span>{% endif %}
+  {% endfor %}
+</div>
+<div class="muted" style="font-size:12px;margin-top:6px">Jobs in the order they started. Updates every few seconds.</div>
+{% else %}
+<div class="muted">No dev deploy has started for this merge yet.</div>
+{% endif %}

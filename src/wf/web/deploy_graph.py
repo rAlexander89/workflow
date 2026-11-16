@@ -12,7 +12,7 @@ from wf import config as _cfg
 from wf import forge as _forge
 from wf import observe
 
-CACHE_SECONDS = 20
+CACHE_SECONDS = 5
 _cache: dict[tuple, tuple[float, dict | None]] = {}
 
 

@@ -118,23 +118,11 @@
   </div>
 
   <div>
-    {% if deploy %}
     <h2>Deploy to dev</h2>
-    <div class="panel">
-      <div class="row between"><b>{{ deploy.name }}</b>
-        <a href="{{ deploy.url }}" target="_blank">open the run</a></div>
-      <div class="graph">
-        {% for j in deploy.jobs %}
-        <a class="jnode {{ j.state }}" href="{{ j.url }}" target="_blank">
-          <span class="jdot"></span>{{ j.name }}
-          <span class="jstate">{{ j.state }}</span>
-        </a>
-        {% if not loop.last %}<span class="jarrow">&#8594;</span>{% endif %}
-        {% endfor %}
-      </div>
-      <div class="muted" style="font-size:12px;margin-top:6px">Jobs in the order they started.</div>
+    <div class="panel" id="deploy-panel" hx-get="/board/ticket/{{ ticket.key }}/deploy-panel"
+         hx-trigger="load, every 10s" hx-swap="innerHTML">
+      <div class="muted">Loading the deploy…</div>
     </div>
-    {% endif %}
 
     {% if failures %}
     <h2>Failures</h2>
