@@ -28,6 +28,11 @@ def _run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess:
 
 
 def _record(conn: sqlite3.Connection, key: str, text: str) -> None:
+    """Write an observation once. Repeating the same reading on every tick adds nothing."""
+    last = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'observe' "
+                        "order by id desc limit 1", (key,)).fetchone()
+    if last and last[0] == text:
+        return
     with conn:
         conn.execute("insert into ticket_event (ticket_key, at, actor, kind, from_value, to_value, detail) "
                      "values (?, strftime('%s','now'), 'observer', 'observe', null, null, ?)", (key, text))

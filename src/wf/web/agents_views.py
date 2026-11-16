@@ -148,31 +148,6 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             try:
                 for key in agents.advance_pipeline(conn, repo=_repo_path(c, None)):
                     _log(f"{key}: moved on by the harness")
-                from wf import observe
-                for key in [r["key"] for r in conn.execute(
-                        "select key from ticket where stage = 'merged' and removed_at is null").fetchall()]:
-                    if observe.latest(conn, key, "merge:") is None:
-                        sha = observe.merge_sha(conn, key, _repo_slug(c))
-                        if sha:
-                            _log(f"{key}: merged to main at {sha[:8]}")
-                    state = observe.observe_dev(conn, key, _repo_slug(c))
-                    if state == "success":
-                        _log(f"{key}: deployed to dev")
-                    elif state == "failed":
-                        _log(f"{key}: dev deploy FAILED")
-                for key in [r["key"] for r in conn.execute(
-                        "select key from ticket where stage = 'deployed' and removed_at is null").fetchall()]:
-                    if observe.observe_prod(conn, key, _repo_slug(c)) == "success":
-                        _log(f"{key}: deployed to prod (observed)")
-                actions = agents.tick(
-                    conn, repo=_repo_path(c, None), runs_dir=_runs_dir(c), access=access,
-                    model=c.agents.model, test_cmd=c.agents.test_cmd, app_cmd=c.agents.app_cmd,
-                    app_url=c.agents.app_url, regression_url=c.agents.regression_url, bot_domain=c.bots.domain if c.bots.enabled else "",
-                    bot_credentials=c.bots.credentials_file, dry_run=False, claude_bin=_claude_bin(),
-                )
-                for a in actions:
-                    _log(f"{a['key']}: {a['role']} on {a['stage']}"
-                         + (f" -> {a['skipped']}" if a.get("skipped") else f" (exit {a.get('exit_code')})"))
                 if not actions:
                     _log("nothing to run: no ticket is waiting for an agent")
             finally:
@@ -199,6 +174,29 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             _log("a pass is already running")
         return RedirectResponse("/agents", status_code=303)
 
+    def observe_tick(c):
+        """Watch the merge and the dev and prod deploys on GitHub. Runs every tick, pass or no pass."""
+        from wf import observe
+        conn = board.connect(db_path)
+        try:
+            for key in [r["key"] for r in conn.execute(
+                    "select key from ticket where stage = 'merged' and removed_at is null").fetchall()]:
+                if observe.latest(conn, key, "merge:") is None:
+                    sha = observe.merge_sha(conn, key, _repo_slug(c))
+                    if sha:
+                        _log(f"{key}: merged to main at {sha[:8]}")
+                state = observe.observe_dev(conn, key, _repo_slug(c))
+                if state == "success":
+                    _log(f"{key}: deployed to dev")
+                elif state == "failed":
+                    _log(f"{key}: dev deploy FAILED")
+            for key in [r["key"] for r in conn.execute(
+                    "select key from ticket where stage = 'deployed' and removed_at is null").fetchall()]:
+                if observe.observe_prod(conn, key, _repo_slug(c)) == "success":
+                    _log(f"{key}: deployed to prod (observed)")
+        finally:
+            conn.close()
+
     def auto_loop():
         """Start the next pass by itself when a ticket is ready, e.g. right after its flag clears."""
         while True:
@@ -210,6 +208,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                 with _lock:
                     if _state["running"]:
                         continue
+                observe_tick(c)
                 conn = board.connect(db_path)
                 try:
                     moved = agents.advance_pipeline(conn, repo=_repo_path(c, None))
