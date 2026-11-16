@@ -30,6 +30,8 @@ class RepoLink:
     name: str  # the internal repo's name, e.g. "api"
     path: str  # where the repo lives on this machine
     remote: str = ""  # the org/repo it pushes to later, e.g. "acme/api"; empty if unknown
+    forge: str = "github"  # "github" or "gitlab"
+    host: str = ""  # the GitLab host, e.g. "gitlab.home.lan"; unused for GitHub
 
 
 @dataclass(frozen=True)
@@ -120,7 +122,8 @@ class Config:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "repos": [{"name": r.name, "path": r.path, "remote": r.remote} for r in self.repos],
+            "repos": [{"name": r.name, "path": r.path, "remote": r.remote, "forge": r.forge, "host": r.host}
+                      for r in self.repos],
             "boards": [{"provider": b.provider, "ref": b.ref, "label": b.label} for b in self.boards],
             "model": asdict(self.model),
             "agents": asdict(self.agents),

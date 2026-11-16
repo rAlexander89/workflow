@@ -22,6 +22,14 @@ class PublishBlocked(board.BoardError):
     pass
 
 
+def _load_repo_links():
+    from wf import config as _cfg
+    try:
+        return _cfg.load(_cfg.default_path()).repos
+    except Exception:
+        return []
+
+
 def _passed_regression(conn: sqlite3.Connection, key: str) -> bool:
     row = conn.execute(
         "select 1 from ticket_event where ticket_key = ? and kind = 'stage' "
@@ -51,12 +59,15 @@ def open_pull_request(
     if pushed.returncode != 0:
         raise PublishBlocked(f"could not push {branch}: {pushed.stderr.strip()[-300:]}")
     body = f"Ticket {key}: {row['summary']}\n\nPassed the internal pipeline, including regression.\n\n{ATTRIBUTION}"
-    argv = ["gh", "pr", "create", "--base", "main", "--head", branch,
-            "--title", f"{key}: {row['summary']}", "--body", body]
-    proc = run(argv, repo)
-    if proc.returncode != 0:
-        raise PublishBlocked(f"gh pr create failed: {proc.stderr.strip()}")
-    url = proc.stdout.strip().splitlines()[-1]
+    from wf import forge as _forge
+    link = next((r for r in _load_repo_links() if Path(r.path) == Path(repo)), None)
+    forge_name = link.forge if link else "github"
+    f = _forge.GitHub(runner=lambda argv, cwd: run(argv, cwd)) if forge_name == "github" else \
+        _forge.GitLab(host=link.host, runner=lambda argv, cwd: run(argv, cwd))
+    try:
+        url = f.open_pr(link.remote if link else "", branch, f"{key}: {row['summary']}", body)
+    except RuntimeError as e:
+        raise PublishBlocked(f"could not open the PR: {e}")
     with conn:
         conn.execute("insert into ticket_event (ticket_key, at, actor, kind, from_value, to_value, detail) "
                      "values (?, strftime('%s','now'), 'harness', 'pr', null, null, ?)", (key, url))
@@ -109,8 +120,11 @@ def merge_when_clear(conn: sqlite3.Connection, *, repo: Path, runner=None, statu
             continue
         url = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'pr' "
                            "order by id desc limit 1", (key,)).fetchone()[0]
-        proc = run(["gh", "pr", "merge", url, "--merge"], repo)
-        if proc.returncode != 0:
+        from wf import forge as _forge
+        f = _forge.for_url(url)
+        merged_ok = (f.merge_pr(url) if isinstance(f, _forge.GitLab) else
+                     _forge.GitHub(runner=lambda argv, cwd: run(argv, cwd)).merge_pr(url))
+        if not merged_ok:
             continue
         with conn:
             conn.execute("insert into ticket_event (ticket_key, at, actor, kind, from_value, to_value, detail) "
