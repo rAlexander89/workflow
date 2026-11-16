@@ -125,3 +125,18 @@ def test_answer_records_the_human_reply_and_clears_the_flag(setup):
     body, origin = c.execute("select body, origin from ticket_comment where ticket_key='ABC-1' order by id desc limit 1").fetchone()
     assert body == "Use /login, redirect is handled there." and origin == "user"
     assert c.execute("select flags from ticket where key='ABC-1'").fetchone()[0] == "[]"
+
+
+def test_send_back_moves_the_ticket_and_leaves_the_reason_for_the_agent(setup):
+    client, db = setup
+    c = board.connect(db)
+    board.move_stage(c, "ABC-1", "in_dev", "user", "start", clock=clock)
+    board.move_stage(c, "ABC-1", "pr_open", "dev", "opened", clock=clock)
+    c.close()
+    r = client.post("/board/ticket/ABC-1/send-back", data={"to": "in_dev", "reason": "the redirect is lost"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    c = board.connect(db)
+    assert c.execute("select stage from ticket where key='ABC-1'").fetchone()[0] == "in_dev"
+    body = c.execute("select body from ticket_comment where ticket_key='ABC-1' order by id desc limit 1").fetchone()[0]
+    assert "the redirect is lost" in body

@@ -148,6 +148,22 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
         finally:
             c.close()
 
+    @app.post("/board/ticket/{key}/send-back")
+    def send_back(request: Request, key: str, to: str = Form(...), reason: str = Form(...)):
+        """Send a ticket back to an earlier stage with a reason. The pipeline restarts from there."""
+        allowed = {"in_dev", "pr_open", "ready_for_qa"}
+        text = reason.strip()
+        c = conn()
+        try:
+            if to in allowed and text:
+                board.add_comment(c, key, "user", f"Sent back to {to}: {text}", origin="user")
+                board.move_stage(c, key, to, "user", f"sent back: {text[:120]}")
+        except board.BoardError:
+            pass
+        finally:
+            c.close()
+        return RedirectResponse(f"/board/ticket/{key}", status_code=303)
+
     @app.post("/board/ticket/{key}/answer")
     def answer_flag(request: Request, key: str, answer: str = Form("")):
         """The human's answer to a flagged question: it becomes a comment the next run reads,

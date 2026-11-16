@@ -53,6 +53,18 @@
 </div>
 {% endif %}
 
+<details style="margin-bottom:12px">
+  <summary class="muted" style="cursor:pointer">Send this ticket back</summary>
+  <form method="post" action="/board/ticket/{{ ticket.key }}/send-back" style="margin-top:8px">
+    <select name="to" style="font:inherit;padding:6px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--fg)">
+      <option value="in_dev">Dev (rework the code)</option>
+      <option value="pr_open">PR review (re-review the branch)</option>
+      <option value="ready_for_qa">QA (run QA again)</option>
+    </select>
+    <textarea name="reason" rows="2" required placeholder="What is wrong, in one or two lines. The agent reads this on its next run." style="flex:1;min-width:260px;font:inherit;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--fg)"></textarea>
+    <button>Send back</button>
+  </form>
+</details>
 <div class="strip">
   {% for s in flow %}<span class="step {{ s.state }}">{{ s.label }}</span>{% endfor %}
 </div>
