@@ -140,6 +140,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
                             perf_requested=board.perf_requested(c, key),
                             pr_url=pr_url, pr_merged=gh.get("merged", False),
                             pr_checks=gh.get("checks", "none"), pr_closed=gh.get("ok") and gh.get("state") == "CLOSED",
+                            flagged=bool(t["flag_list"]),
                             prod_ready=bool(t["stage"] in ("regression", "performance") and
                                             agents_prod_ready(c, key)) if t["stage"] else False))
         finally:
