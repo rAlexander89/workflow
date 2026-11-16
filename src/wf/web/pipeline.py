@@ -75,10 +75,11 @@ def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: boo
         if key == "performance" and not perf_requested and (stage is None or pos >= _ORDER.index("regression")):
             state = "skipped"
         elif key == "github":
-            if not pr_url:
-                state = "todo"
-            elif pr_merged:
+            # The GitHub PR is only opened once internal review and QA have passed.
+            if pr_merged:
                 state = "done"
+            elif not pr_url or stage != "qa_approved":
+                state = "todo"
             elif pr_closed or pr_checks == "failed":
                 state = "failed"
             else:

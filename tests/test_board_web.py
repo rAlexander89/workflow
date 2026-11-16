@@ -140,3 +140,13 @@ def test_send_back_moves_the_ticket_and_leaves_the_reason_for_the_agent(setup):
     assert c.execute("select stage from ticket where key='ABC-1'").fetchone()[0] == "in_dev"
     body = c.execute("select body from ticket_comment where ticket_key='ABC-1' order by id desc limit 1").fetchone()[0]
     assert "the redirect is lost" in body
+
+
+def test_only_one_step_is_in_progress_at_a_time():
+    from wf.web import pipeline as p
+    for stage in ["in_dev", "pr_open", "pr_in_review", "ready_for_qa", "qa_approved", "merged", "regression", "performance", "deployed"]:
+        for pr in (None, "https://x/pr/1"):
+            flow = p.flow_states(stage, last_run_failed=False, perf_requested=True, pr_url=pr, pr_merged=False,
+                                 pr_checks="pending", flagged=False)
+            current = [f["key"] for f in flow if f["state"] == "current"]
+            assert len(current) <= 1, (stage, pr, current)
