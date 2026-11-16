@@ -87,6 +87,8 @@ def observe_dev(conn: sqlite3.Connection, key: str, repo_slug: str, runner: Runn
     state = _workflow_state(repo_slug, sha, DEV_WORKFLOW, runner)
     if state in ("success", "failed"):
         _record(conn, key, f"dev:{state}:{sha}")
+    if state == "failed":
+        record_failure(conn, key, failure_report(repo_slug, sha, DEV_WORKFLOW, runner))
     return state
 
 
@@ -123,3 +125,45 @@ def observe_prod(conn: sqlite3.Connection, key: str, repo_slug: str, runner: Run
 def prod_deployed(conn: sqlite3.Connection, key: str) -> bool:
     obs = latest(conn, key, "prod:")
     return bool(obs) and obs.startswith("prod:success:")
+
+
+def failure_report(repo_slug: str, sha: str, workflow: str, runner: Runner = _run) -> list[dict]:
+    """Why a run failed: each failed job, its GitHub link, and the messages GitHub attached to it."""
+    proc = runner(["gh", "run", "list", "--repo", repo_slug, "--branch", "main", "--limit", "50",
+                   "--json", "databaseId,headSha,name,url"], Path("."))
+    if proc.returncode != 0:
+        return []
+    runs = [r for r in json.loads(proc.stdout or "[]") if r.get("headSha") == sha and r.get("name") == workflow]
+    report = []
+    for run in runs:
+        if run.get("databaseId") is None:
+            continue
+        jobs = runner(["gh", "run", "view", str(run["databaseId"]), "--repo", repo_slug, "--json", "jobs"], Path("."))
+        for job in json.loads(jobs.stdout or "{}").get("jobs", []):
+            if (job.get("conclusion") or "") != "failure":
+                continue
+            ann = runner(["gh", "api", f"repos/{repo_slug}/check-runs/{job['databaseId']}/annotations"], Path("."))
+            messages = [a.get("message", "") for a in json.loads(ann.stdout or "[]")
+                        if a.get("annotation_level") == "failure" or "not started" in a.get("message", "")]
+            report.append({"step": workflow, "job": job.get("name", ""), "url": job.get("url") or run.get("url", ""),
+                           "reasons": messages[:3] or ["no message was attached to this job; open it on GitHub"]})
+    return report
+
+
+def record_failure(conn: sqlite3.Connection, key: str, report: list[dict]) -> None:
+    """Keep the failure report on the ticket, once per distinct report."""
+    text = json.dumps(report, sort_keys=True)
+    last = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'failure' "
+                        "order by id desc limit 1", (key,)).fetchone()
+    if last and last[0] == text:
+        return
+    with conn:
+        conn.execute("insert into ticket_event (ticket_key, at, actor, kind, from_value, to_value, detail) "
+                     "values (?, strftime('%s','now'), 'observer', 'failure', null, null, ?)", (key, text))
+
+
+def failures(conn: sqlite3.Connection, key: str) -> list[dict]:
+    """The latest failure report for the ticket, as a list of {step, job, url, reasons}."""
+    row = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'failure' "
+                       "order by id desc limit 1", (key,)).fetchone()
+    return json.loads(row[0]) if row else []

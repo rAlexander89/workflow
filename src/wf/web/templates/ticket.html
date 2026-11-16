@@ -109,6 +109,21 @@
   </div>
 
   <div>
+    {% if failures %}
+    <h2>Failures</h2>
+    <div class="panel">
+      {% for f in failures %}
+      <div class="item">
+        <div><b class="bad">{{ f.step }}</b> <span class="meta">{{ f.job }}</span></div>
+        {% for r in f.reasons %}<div class="meta">{{ r }}</div>{% endfor %}
+        {% if f.url %}<div><a href="{{ f.url }}" target="_blank">Open the job on GitHub</a></div>{% endif %}
+        {% if f.output %}<div class="meta"><code>{{ f.output }}</code></div>{% endif %}
+        {% if f.stderr %}<div class="meta"><code>{{ f.stderr }}</code></div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
     <h2>History</h2>
     <div class="panel">
       {% for e in events[:12] %}

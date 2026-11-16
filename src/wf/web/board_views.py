@@ -113,6 +113,14 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             events = [e for e in events if e not in noise]
             for c_ in detail["comments"]:
                 c_["preview"] = (c_["body"] or "").strip().splitlines()[0][:160] if c_.get("body") else ""
+            from wf import observe as _obs
+            failure_list = _obs.failures(c, key)
+            for r in runs:
+                if r["exit_code"] not in (0, None) or r["timed_out"]:
+                    failure_list.append({"step": f"{r['role']} agent on {r['stage']}", "job": "agent run",
+                                         "url": "", "reasons": [f"exit {r['exit_code']}" if not r["timed_out"]
+                                                                else "timed out"],
+                                         "output": r["output_path"], "stderr": r["output_path"].replace("output.jsonl", "stderr.log")})
             t = detail["ticket"]
             t["flag_list"] = json.loads(t["flags"] or "[]")
             t["label_list"] = json.loads(t["labels"] or "[]")
@@ -134,7 +142,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             flag_reason = next((e["detail"] for e in events if e["kind"] == "flag"), "") if t["flag_list"] else ""
             return page(request, "ticket.html", "agents", ticket=t, comments=detail["comments"],
                         events=events, noise_count=len(noise), flag_reason=flag_reason, outbox_items=items, runs=runs, next_role=next_role,
-                        stages=_pipeline.progress(t["stage"]), title=key,
+                        stages=_pipeline.progress(t["stage"]), title=key, failures=failure_list,
                         flow=_pipeline.flow_states(
                             t["stage"],
                             last_run_failed=bool(runs and (runs[0]["exit_code"] != 0 or runs[0]["timed_out"])),
