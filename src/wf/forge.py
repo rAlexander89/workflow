@@ -92,6 +92,7 @@ class GitHub:
     def jobs(self, repo: str, run_id: str) -> list[dict]:
         proc = self.runner(["gh", "run", "view", run_id, "--repo", repo, "--json", "jobs"], Path("."))
         return [{"id": str(j.get("databaseId", "")), "name": j.get("name", ""),
+                 "status": (j.get("status") or "").lower(), "started": j.get("startedAt") or "",
                  "conclusion": (j.get("conclusion") or "").lower(), "url": j.get("url", "")}
                 for j in json.loads(proc.stdout or "{}").get("jobs", [])]
 

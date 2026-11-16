@@ -121,6 +121,8 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
                                          "url": "", "reasons": [f"exit {r['exit_code']}" if not r["timed_out"]
                                                                 else "timed out"],
                                          "output": r["output_path"], "stderr": r["output_path"].replace("output.jsonl", "stderr.log")})
+            from wf.web import deploy_graph as _dg
+            deploy = _dg.dev_deploy(c, key)
             t = detail["ticket"]
             t["flag_list"] = json.loads(t["flags"] or "[]")
             t["label_list"] = json.loads(t["labels"] or "[]")
@@ -142,7 +144,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             flag_reason = next((e["detail"] for e in events if e["kind"] == "flag"), "") if t["flag_list"] else ""
             return page(request, "ticket.html", "agents", ticket=t, comments=detail["comments"],
                         events=events, noise_count=len(noise), flag_reason=flag_reason, outbox_items=items, runs=runs, next_role=next_role,
-                        stages=_pipeline.progress(t["stage"]), title=key, failures=failure_list,
+                        stages=_pipeline.progress(t["stage"]), title=key, failures=failure_list, deploy=deploy,
                         flow=_pipeline.flow_states(
                             t["stage"],
                             last_run_failed=bool(runs and (runs[0]["exit_code"] != 0 or runs[0]["timed_out"])),

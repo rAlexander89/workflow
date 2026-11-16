@@ -15,6 +15,15 @@
   .item .meta { color:var(--muted); font-size:12px; }
   details summary { cursor:pointer; color:var(--muted); font-size:12px; }
   details[open] summary { margin-bottom:6px; }
+  .graph { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:8px; }
+  .jnode { display:inline-flex; flex-direction:column; gap:2px; padding:8px 10px; border-radius:8px; border:1px solid var(--line); text-decoration:none; color:var(--fg); min-width:120px; background:var(--bg); }
+  .jnode .jdot { width:9px; height:9px; border-radius:50%; background:var(--line); margin-bottom:2px; }
+  .jnode .jstate { font-size:11px; color:var(--muted); }
+  .jnode.success { border-color:var(--ok); } .jnode.success .jdot { background:var(--ok); }
+  .jnode.running { border-color:var(--warn); } .jnode.running .jdot { background:var(--warn); }
+  .jnode.failed { border-color:var(--bad); } .jnode.failed .jdot { background:var(--bad); }
+  .jnode.cancelled, .jnode.skipped, .jnode.waiting { opacity:.6; }
+  .jarrow { color:var(--muted); }
   .callout { border:1px solid var(--bad); background:var(--bad-bg); border-radius:10px; padding:12px 14px; margin-top:12px; }
   .callout b { color:var(--bad); }
   @media (max-width:760px) { .cols { grid-template-columns:1fr; } }
@@ -109,6 +118,24 @@
   </div>
 
   <div>
+    {% if deploy %}
+    <h2>Deploy to dev</h2>
+    <div class="panel">
+      <div class="row between"><b>{{ deploy.name }}</b>
+        <a href="{{ deploy.url }}" target="_blank">open the run</a></div>
+      <div class="graph">
+        {% for j in deploy.jobs %}
+        <a class="jnode {{ j.state }}" href="{{ j.url }}" target="_blank">
+          <span class="jdot"></span>{{ j.name }}
+          <span class="jstate">{{ j.state }}</span>
+        </a>
+        {% if not loop.last %}<span class="jarrow">&#8594;</span>{% endif %}
+        {% endfor %}
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:6px">Jobs in the order they started.</div>
+    </div>
+    {% endif %}
+
     {% if failures %}
     <h2>Failures</h2>
     <div class="panel">
