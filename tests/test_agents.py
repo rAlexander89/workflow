@@ -298,3 +298,25 @@ def test_an_approval_from_before_regression_does_not_count_as_a_regression_pass(
     board.move_stage(conn, "ABC-1", "regression", actor="user", reason="x")  # real time: after the approval
     agents.advance_pipeline(conn, repo=repo)
     assert ticket_row(conn, "ABC-1")["stage"] == "regression"
+
+
+def test_regression_runs_against_the_dev_url_and_its_bot_signs_in_there(conn, repo, tmp_path):
+    _set_stage(conn, "regression")
+    calls = []
+    res = agents.run_agent(conn, "qa", "ABC-1", repo=repo, runs_dir=tmp_path / "runs", access=True,
+                           model="m", claude_bin="/bin/echo", runner=fake_runner(calls), clock=clock,
+                           app_url="http://127.0.0.1:3002", regression_url="https://dev.fokist.com",
+                           bot_domain="fokist.com", bot_credentials="/tmp/c.env")
+    env = json.loads((res.run.output_path.parent / "gateway.json").read_text())["mcpServers"]["gateway"]["env"]
+    assert env["WF_APP_URL"] == "https://dev.fokist.com"
+    assert env["WF_BOT_APP"] == "https://dev.fokist.com"
+
+
+def test_other_stages_keep_the_local_app(conn, repo, tmp_path):
+    calls = []
+    res = agents.run_agent(conn, "dev", "ABC-1", repo=repo, runs_dir=tmp_path / "runs", access=True,
+                           model="m", claude_bin="/bin/echo", runner=fake_runner(calls), clock=clock,
+                           app_url="http://127.0.0.1:3002", regression_url="https://dev.fokist.com")
+    env = json.loads((res.run.output_path.parent / "gateway.json").read_text())["mcpServers"]["gateway"]["env"]
+    assert env["WF_APP_URL"] == "http://127.0.0.1:3002"
+    assert "WF_BOT_APP" not in env

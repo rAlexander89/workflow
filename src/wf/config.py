@@ -57,6 +57,7 @@ class AgentsConfig:
     model: str = "claude-sonnet-5-5"  # Claude model for agent runs
     app_cmd: str = ""  # starts the project's app; "{port}" is the port the agent gets (empty = no app)
     app_url: str = ""  # a local app already running (e.g. http://127.0.0.1:3002); used instead of starting one
+    regression_url: str = ""  # where the final regression runs, e.g. https://dev.fokist.com
     auto_run: bool = False  # start the next pass by itself when a ticket is ready (after a flag clears, etc.)
 
 

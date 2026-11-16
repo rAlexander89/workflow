@@ -144,7 +144,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                 actions = agents.tick(
                     conn, repo=_repo_path(c, None), runs_dir=_runs_dir(c), access=access,
                     model=c.agents.model, test_cmd=c.agents.test_cmd, app_cmd=c.agents.app_cmd,
-                    app_url=c.agents.app_url, bot_domain=c.bots.domain if c.bots.enabled else "",
+                    app_url=c.agents.app_url, regression_url=c.agents.regression_url, bot_domain=c.bots.domain if c.bots.enabled else "",
                     bot_credentials=c.bots.credentials_file, dry_run=False, claude_bin=_claude_bin(),
                 )
                 for a in actions:
@@ -232,7 +232,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                     board.move_stage(conn, key, "in_dev", "dev", "dev pickup")
                 res = agents.run_agent(conn, role, key, repo=_repo_path(c, None), runs_dir=_runs_dir(c),
                                        access=c.model.claude_code_access, model=c.agents.model,
-                                       test_cmd=c.agents.test_cmd, app_cmd=c.agents.app_cmd, app_url=c.agents.app_url, bot_domain=c.bots.domain if c.bots.enabled else "", bot_credentials=c.bots.credentials_file, claude_bin=_claude_bin())
+                                       test_cmd=c.agents.test_cmd, app_cmd=c.agents.app_cmd, app_url=c.agents.app_url, regression_url=c.agents.regression_url, bot_domain=c.bots.domain if c.bots.enabled else "", bot_credentials=c.bots.credentials_file, claude_bin=_claude_bin())
                 code = res.run.exit_code if res.run else None
                 _log(f"{key}: {role} finished (exit {code})")
             finally:

@@ -152,8 +152,13 @@ def run_agent(
     access: bool, model: str, test_cmd: str = "", app_cmd: str = "", app_url: str = "", claude_bin: str | None = None,
     runner: claude_run.Runner | None = None, timeout: float = 3600.0,
     clock: Callable[[], float] = time.time, bot_domain: str = "", bot_credentials: str = "",
+    regression_url: str = "",
 ) -> AgentResult:
     ensure_schema(conn)
+    stage_now = conn.execute("select stage from ticket where key = ?", (key,)).fetchone()
+    on_dev = bool(regression_url) and stage_now is not None and stage_now[0] == "regression"
+    if on_dev:
+        app_url = regression_url  # the final regression runs against the deployed dev app
     bot_email = f"{role}@{bot_domain}" if bot_domain else ""
     cred_path = bot_credentials if bot_domain else ""
     detail = board.ticket_detail(conn, key)
@@ -168,6 +173,8 @@ def run_agent(
     }
     gateway = [sys.executable, "-m", "wf.gateway_server"]
     env.update({"WF_BOT_EMAIL": bot_email, "WF_BOT_CREDENTIALS": cred_path})
+    if on_dev:
+        env["WF_BOT_APP"] = regression_url  # the bot signs in to the same app it tests
     result = claude_run.run(
         worktree=worktree, prompt=brief(detail), system_prompt=system_prompt(role, bot_email, cred_path), model=model,
         run_dir=run_dir, profile=role, gateway_command=gateway, access=access, gateway_env=env,
@@ -269,6 +276,7 @@ def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, pr_merged=None) ->
 def tick(
     conn: sqlite3.Connection, *, repo: Path, runs_dir: Path, access: bool, model: str,
     test_cmd: str = "", app_cmd: str = "", app_url: str = "", bot_domain: str = "", bot_credentials: str = "",
+    regression_url: str = "",
     dry_run: bool = True, runner: claude_run.Runner | None = None,
     claude_bin: str | None = None, clock: Callable[[], float] = time.time,
 ) -> list[dict]:
@@ -302,6 +310,7 @@ def tick(
                 action["stage"] = "in_dev"
             res = run_agent(conn, role, row["key"], repo=repo, runs_dir=runs_dir, access=access,
                             model=model, test_cmd=test_cmd, app_cmd=app_cmd, app_url=app_url, claude_bin=claude_bin, runner=runner, clock=clock,
+                            regression_url=regression_url,
                             bot_domain=bot_domain, bot_credentials=bot_credentials)
             action["exit_code"] = res.run.exit_code if res.run else None
         actions.append(action)
