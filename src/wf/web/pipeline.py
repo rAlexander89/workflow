@@ -47,9 +47,8 @@ def progress(current: str | None) -> list[dict]:
 FLOW = [
     ("pr_review", "Internal PR review", "pr_open"),
     ("qa", "QA", "ready_for_qa"),
-    ("approved", "QA approved", "qa_approved"),
-    ("main", "In main", "merged"),
     ("github", "GitHub PR", None),
+    ("main", "In main (GitHub)", None),
     ("dev", "Deployed to dev", None),
     ("regression", "Regression on dev", "regression"),
     ("performance", "Performance", "performance"),
@@ -83,9 +82,16 @@ def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: boo
             else:
                 state = "current"
         elif key == "main":
-            state = "done" if pos >= _ORDER.index("merged") else ("current" if stage == "qa_approved" else "todo")
-        elif key == "dev":
             state = "done" if pr_merged else "todo"
+        elif key == "dev":
+            state = "done" if (stage in ("regression", "performance", "deployed")) else "todo"
+        elif key == "pr_review" and stage in ("ready_for_qa", "qa_approved", "merged", "regression", "performance", "deployed"):
+            state = "done"
+        elif key == "qa":
+            if stage == "ready_for_qa":
+                state = "failed" if last_run_failed else "current"
+            elif stage in ("qa_approved", "merged", "regression", "performance", "deployed"):
+                state = "done"
         elif at is not None and stage == at:
             state = "failed" if last_run_failed else "current"
         elif at is not None and pos >= 0 and _ORDER.index(at) < pos:

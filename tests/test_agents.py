@@ -163,7 +163,7 @@ def test_merge_succeeds_with_both_approvals_and_passing_tests(conn, repo, tmp_pa
 # --- GitHub gate ----------------------------------------------------------------------
 
 def test_github_refuses_before_the_pipeline_passes(conn, repo):
-    with pytest.raises(github_agent.PublishBlocked, match="must be in main first"):
+    with pytest.raises(github_agent.PublishBlocked, match="must pass QA first"):
         github_agent.open_pull_request(conn, "ABC-1", repo=repo, confirm=True)
 
 

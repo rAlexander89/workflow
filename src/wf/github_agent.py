@@ -37,8 +37,8 @@ def open_pull_request(
     row = conn.execute("select stage, summary from ticket where key = ?", (key,)).fetchone()
     if row is None:
         raise PublishBlocked(f"no ticket {key}")
-    if row["stage"] not in ("merged", "regression", "performance", "deployed"):
-        raise PublishBlocked(f"{key} is in {row['stage']}; it must be in main first")
+    if row["stage"] not in ("qa_approved", "merged", "regression", "performance", "deployed"):
+        raise PublishBlocked(f"{key} is in {row['stage']}; it must pass QA first")
     if not confirm:
         raise PublishBlocked("publishing to GitHub needs an explicit confirm")
     remote = subprocess.run(["git", "remote", "get-url", "origin"], cwd=repo,
@@ -67,7 +67,7 @@ def publish_ready(conn: sqlite3.Connection, *, repo: Path, runner=None) -> list[
     """Open the GitHub PR for every ticket that has passed the internal pipeline and has none yet."""
     opened = []
     rows = conn.execute(
-        "select key from ticket where stage = 'merged' and removed_at is null "
+        "select key from ticket where stage = 'qa_approved' and removed_at is null "
         "and key not in (select ticket_key from ticket_event where kind = 'pr')").fetchall()
     for row in rows:
         try:
@@ -107,7 +107,7 @@ def merge_when_clear(conn: sqlite3.Connection, *, repo: Path, runner=None, statu
     get = status or github_status.pr_status
     merged = []
     rows = conn.execute(
-        "select key, flags from ticket where stage in ('qa_approved', 'merged') and removed_at is null").fetchall()
+        "select key, flags, stage from ticket where stage in ('qa_approved', 'merged') and removed_at is null").fetchall()
     for row in rows:
         key = row["key"]
         if row["flags"] not in (None, "[]"):
@@ -135,5 +135,7 @@ def merge_when_clear(conn: sqlite3.Connection, *, repo: Path, runner=None, statu
         with conn:
             conn.execute("insert into ticket_event (ticket_key, at, actor, kind, from_value, to_value, detail) "
                          "values (?, strftime('%s','now'), 'harness', 'pr_merged', null, null, ?)", (key, url))
+        if row["stage"] == "qa_approved":
+            _board.move_stage(conn, key, "merged", "harness", f"PR merged into GitHub main: {url}")
         merged.append(key)
     return merged

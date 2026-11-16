@@ -45,6 +45,7 @@ def test_merges_when_qa_passed_checks_green_and_nothing_flagged(tmp_path):
     git = Git()
     assert github_agent.merge_when_clear(c, repo=tmp_path, runner=git, status=green()) == [ISSUE]
     assert ["gh", "pr", "merge", "https://github.com/o/r/pull/9", "--merge"] in git.calls
+    assert c.execute("select stage from ticket where key = ?", (ISSUE,)).fetchone()[0] == "merged"
 
 
 def test_a_flag_stops_the_merge(tmp_path):

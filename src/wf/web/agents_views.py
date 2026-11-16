@@ -150,15 +150,6 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                 for a in actions:
                     _log(f"{a['key']}: {a['role']} on {a['stage']}"
                          + (f" -> {a['skipped']}" if a.get("skipped") else f" (exit {a.get('exit_code')})"))
-                # Merge is automatic once both approvals and passing tests are in place.
-                for key in [r["key"] for r in conn.execute(
-                        "select key from ticket where stage = 'qa_approved' and removed_at is null").fetchall()]:
-                    try:
-                        head = merge.merge(conn, key, repo=_repo_path(c, None), runs_dir=_runs_dir(c),
-                                           test_cmd=c.agents.test_cmd)
-                        _log(f"{key} merged into main at {head[:8]}")
-                    except merge.MergeBlocked as e:
-                        _log(f"{key} not merged yet: {e}")
                 if not actions:
                     _log("nothing to run: no ticket is waiting for an agent")
             finally:
