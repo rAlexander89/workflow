@@ -90,11 +90,18 @@ def observe_dev(conn: sqlite3.Connection, key: str, repo_slug: str, runner: Runn
     if not sha:
         return "waiting"
     state = _workflow_state(repo_slug, sha, _workflow_name(f, DEV_WORKFLOW), f)
-    if state in ("success", "failed"):
+    if state in ("success", "failed", "running"):
         _record(conn, key, f"dev:{state}:{sha}")
+    if state == "success":
+        record_failure(conn, key, [])  # a passing deploy clears the old failure report
     if state == "failed":
         record_failure(conn, key, failure_report(repo_slug, sha, _workflow_name(f, DEV_WORKFLOW), runner, forge=f))
     return state
+
+
+def dev_running(conn: sqlite3.Connection, key: str) -> bool:
+    obs = latest(conn, key, "dev:")
+    return bool(obs) and obs.startswith("dev:running:")
 
 
 def dev_deployed(conn: sqlite3.Connection, key: str) -> bool:
