@@ -136,9 +136,9 @@ def test_run_command_limits_tools_and_connects_only_the_gateway(tmp_path):
     assert argv[argv.index("--add-dir") + 1] == str(wt)
     assert seen["cwd"] == wt
     builtin = argv[argv.index("--tools") + 1: argv.index("--allowedTools")]
-    assert builtin == ["Read", "Edit", "Write"]  # no Bash
+    assert builtin == ["Read", "Edit", "Write", "Glob", "Grep"]  # no Bash
     allowed = argv[argv.index("--allowedTools") + 1: argv.index("--add-dir")]
-    assert all(t.startswith("mcp__gateway__") or t in {"Read", "Edit", "Write"} for t in allowed)
+    assert all(t.startswith("mcp__gateway__") or t in {"Read", "Edit", "Write", "Glob", "Grep"} for t in allowed)
     assert "Bash" not in allowed
 
     mcp = result.output_path.parent / "gateway.json"

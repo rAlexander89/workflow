@@ -51,10 +51,28 @@ class ModelConfig:
 
 
 @dataclass
+class AgentsConfig:
+    runs_dir: str = "~/wf-runs"  # worktrees and run output live here, outside the repos
+    test_cmd: str = "make test"  # runs in each ticket's worktree; a merge needs it to pass
+    model: str = "claude-sonnet-5-5"  # Claude model for agent runs
+    app_cmd: str = ""  # starts the project's app; "{port}" is the port the agent gets (empty = no app)
+
+
+@dataclass
+class BotsConfig:
+    enabled: bool = False  # set by `wf bots setup` once the user agrees
+    domain: str = ""  # the bot accounts are <role>@<domain>
+    roles: list = field(default_factory=list)
+    credentials_file: str = ""  # outside the repos; holds the passwords, owner-only
+
+
+@dataclass
 class Config:
     repos: list[RepoLink] = field(default_factory=list)
     boards: list[BoardLink] = field(default_factory=list)
     model: ModelConfig = field(default_factory=ModelConfig)
+    agents: AgentsConfig = field(default_factory=AgentsConfig)
+    bots: BotsConfig = field(default_factory=BotsConfig)
 
     # --- repos -------------------------------------------------------------
 
@@ -102,6 +120,8 @@ class Config:
             "repos": [{"name": r.name, "path": r.path, "remote": r.remote} for r in self.repos],
             "boards": [{"provider": b.provider, "ref": b.ref, "label": b.label} for b in self.boards],
             "model": asdict(self.model),
+            "agents": asdict(self.agents),
+            "bots": asdict(self.bots),
         }
 
     @classmethod
@@ -113,6 +133,10 @@ class Config:
             cfg.add_board(b["provider"], b["ref"], b.get("label", ""))
         if "model" in data:
             cfg.model = ModelConfig(**data["model"])
+        if "agents" in data:
+            cfg.agents = AgentsConfig(**data["agents"])
+        if "bots" in data:
+            cfg.bots = BotsConfig(**data["bots"])
         return cfg
 
 

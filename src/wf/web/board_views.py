@@ -87,20 +87,59 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
 
     @app.get("/board/ticket/{key}", response_class=HTMLResponse)
     def ticket_page(request: Request, key: str):
+        from wf import agents as _agents
+        from wf.web import pipeline as _pipeline
+        from datetime import datetime
+
+        def when(ts):
+            return datetime.fromtimestamp(ts).strftime("%b %d %H:%M") if ts else ""
+
         c = conn()
         try:
             detail = board.ticket_detail(c, key)
             if detail is None:
                 return HTMLResponse("No such ticket.", status_code=404)
+            _agents.ensure_schema(c)
             items = [dict(r) for r in c.execute(
-                "select * from outbox where ticket_key = ? order by id", (key,)).fetchall()]
+                "select * from outbox where ticket_key = ? and kind = 'transition' order by id", (key,)).fetchall()]
+            runs = [dict(r) for r in c.execute(
+                "select * from agent_run where key = ? order by id desc", (key,)).fetchall()]
+            for r in runs:
+                r["when"] = when(r["started_at"])
+            events = [dict(e) for e in reversed(detail["events"])]
+            for e in events:
+                e["when"] = when(e["at"])
+            noise = [e for e in events if e["actor"] == "sync" or (e["actor"] == "outbox" and e["kind"] == "stage")]
+            events = [e for e in events if e not in noise]
+            for c_ in detail["comments"]:
+                c_["preview"] = (c_["body"] or "").strip().splitlines()[0][:160] if c_.get("body") else ""
             t = detail["ticket"]
             t["flag_list"] = json.loads(t["flags"] or "[]")
             t["label_list"] = json.loads(t["labels"] or "[]")
-            return page(request, "ticket.html", "board", ticket=t, comments=detail["comments"],
-                        events=detail["events"], outbox_items=items, title=key)
+            next_role = None if t["flag_list"] else _agents.STAGE_ROLE.get(t["stage"] or "")
+            flag_reason = next((e["detail"] for e in events if e["kind"] == "flag"), "") if t["flag_list"] else ""
+            return page(request, "ticket.html", "agents", ticket=t, comments=detail["comments"],
+                        events=events, noise_count=len(noise), flag_reason=flag_reason, outbox_items=items, runs=runs, next_role=next_role,
+                        stages=_pipeline.progress(t["stage"]), title=key)
         finally:
             c.close()
+
+    @app.post("/board/ticket/{key}/answer")
+    def answer_flag(request: Request, key: str, answer: str = Form("")):
+        """The human's answer to a flagged question: it becomes a comment the next run reads,
+        and the flags clear, so the pipeline can continue."""
+        text = answer.strip()
+        c = conn()
+        try:
+            if not text:
+                return RedirectResponse(f"/board/ticket/{key}", status_code=303)
+            board.add_comment(c, key, "user", text, origin="user")
+            flags = json.loads(c.execute("select flags from ticket where key = ?", (key,)).fetchone()["flags"])
+            for flag in flags:
+                board.clear_flag(c, key, flag, "user")
+        finally:
+            c.close()
+        return RedirectResponse(f"/board/ticket/{key}", status_code=303)
 
     @app.post("/board/ticket/{key}/flag/clear")
     def clear_flag(key: str, flag: str = Form(...)):

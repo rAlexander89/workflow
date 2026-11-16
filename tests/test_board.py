@@ -460,3 +460,14 @@ def test_unknown_actor_is_refused(conn):
     sync(conn, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
     with pytest.raises(board.BoardError, match="may not move"):
         board.move_stage(conn, "ABC-1", "pr_open", actor="some-bot", reason="x", clock=clock)
+
+
+def test_workflow_statuses_survive_a_sync_without_tickets_in_them(conn):
+    sync(conn, payload(projects=[{**PROJECT, "statuses": STATUSES + [
+        {"name": "Needs refinement", "category": "new", "source": "workflow"}]}], tickets=[]))
+    fresh = payload(projects=[{**PROJECT, "statuses": [{"name": "Ready for dev", "category": "new",
+                                                       "source": "observed"}]}], tickets=[])
+    board.carry_workflow_statuses(conn, fresh)
+    sync(conn, fresh)
+    names = {r["name"] for r in conn.execute("select name from project_status where project_key='ABC'")}
+    assert "Needs refinement" in names

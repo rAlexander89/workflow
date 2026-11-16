@@ -1,0 +1,203 @@
+"""Agents: run the role that owns a ticket's stage, and loop over the board.
+
+Each run is one `claude -p` process in the ticket's branch worktree, connected to the
+gateway (wf.gateway_server) with its scope set in the environment. The role's prompt
+from prompts/ is the system prompt. The ticket is the task.
+
+Every ticket has one branch, `agent/<KEY>`, cut from the internal main. All roles work on
+that branch: dev writes to it, review and QA check it, and the merge gate reads it.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shlex
+import subprocess
+import sqlite3
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+from wf import board, claude_run
+
+PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
+MAX_RUNS_PER_STAGE = 3  # loop guard: a ticket that bounces this often needs a human
+
+# Which role runs in each stage. Stages not listed have no agent.
+STAGE_ROLE: dict[str, str] = {
+    "needs_refinement": "product",
+    "in_refinement": "staff",
+    "hotfix_review": "staff",
+    "ready_for_dev": "dev",
+    "in_dev": "dev",
+    "pr_open": "pr_review",
+    "pr_in_review": "pr_review",
+    "ready_for_qa": "qa",
+    "regression": "qa",
+    "deployed": "performance",
+}
+
+SCHEMA = """
+create table if not exists agent_run (
+    id          integer primary key autoincrement,
+    key         text not null,
+    stage       text not null,
+    role        text not null,
+    started_at  integer not null,
+    exit_code   integer,
+    timed_out   integer not null default 0,
+    output_path text not null
+);
+create index if not exists agent_run_key on agent_run (key, stage);
+"""
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(SCHEMA)
+
+
+# --- git ----------------------------------------------------------------------------
+
+def branch_for(key: str) -> str:
+    return f"agent/{key}"
+
+
+def _git(args: list[str], cwd: Path) -> str:
+    proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
+    return proc.stdout.strip()
+
+
+def ensure_worktree(repo: Path, key: str, worktrees: Path) -> Path:
+    """The ticket's worktree on its branch, created from the internal main if needed."""
+    branch = branch_for(key)
+    worktrees = worktrees.resolve()
+    path = worktrees / key
+    if path.exists():
+        return path
+    worktrees.mkdir(parents=True, exist_ok=True)
+    branches = _git(["branch", "--list", branch], repo)
+    if branches:
+        _git(["worktree", "add", str(path), branch], repo)
+    else:
+        _git(["worktree", "add", "-b", branch, str(path), "main"], repo)
+    return path
+
+
+def head_of(worktree: Path) -> str:
+    return _git(["rev-parse", "HEAD"], worktree)
+
+
+# --- runs ---------------------------------------------------------------------------
+
+@dataclass
+class AgentResult:
+    key: str
+    stage: str
+    role: str
+    run: claude_run.RunResult | None
+
+
+def brief(detail: dict) -> str:
+    t = detail["ticket"]
+    lines = [
+        f"Ticket {t['key']}: {t['summary']}",
+        f"Status in Jira: {t['jira_status']}. Internal stage: {t['stage']}.",
+        "",
+        "Description:",
+        t.get("description") or "(none)",
+    ]
+    if t.get("acceptance"):
+        lines += ["", "Acceptance criteria:", t["acceptance"]]
+    comments = [c for c in detail.get("comments", []) if c.get("body")]
+    if comments:
+        lines += ["", "Comments:"] + [f"- {c['author']}: {c['body']}" for c in comments[-10:]]
+    return "\n".join(lines)
+
+
+def system_prompt(role: str) -> str:
+    path = PROMPTS_DIR / f"{role}.md"
+    if not path.exists():
+        raise FileNotFoundError(f"no prompt for role {role!r} at {path}")
+    return path.read_text()
+
+
+def run_agent(
+    conn: sqlite3.Connection, role: str, key: str, *, repo: Path, runs_dir: Path,
+    access: bool, model: str, test_cmd: str = "", app_cmd: str = "", claude_bin: str | None = None,
+    runner: claude_run.Runner | None = None, timeout: float = 3600.0,
+    clock: Callable[[], float] = time.time,
+) -> AgentResult:
+    ensure_schema(conn)
+    detail = board.ticket_detail(conn, key)
+    if detail is None:
+        raise board.BoardError(f"no ticket {key}")
+    stage = detail["ticket"]["stage"]
+    worktree = ensure_worktree(repo, key, runs_dir / "worktrees")
+    run_dir = runs_dir / "runs" / key / f"{role}-{int(clock())}"
+    env = {
+        "WF_ROLE": role, "WF_KEY": key, "WF_DB": str(conn.execute("pragma database_list").fetchone()[2]),
+        "WF_WORKTREE": str(worktree), "WF_TEST_CMD": test_cmd, "WF_APP_CMD": app_cmd,
+    }
+    gateway = [sys.executable, "-m", "wf.gateway_server"]
+    result = claude_run.run(
+        worktree=worktree, prompt=brief(detail), system_prompt=system_prompt(role), model=model,
+        run_dir=run_dir, profile=role, gateway_command=gateway, access=access, gateway_env=env,
+        timeout=timeout, claude_bin=claude_bin, runner=runner,
+    )
+    conn.execute(
+        "insert into agent_run (key, stage, role, started_at, exit_code, timed_out, output_path) "
+        "values (?, ?, ?, ?, ?, ?, ?)",
+        (key, stage, role, int(clock()), result.exit_code, int(result.timed_out), str(result.output_path)),
+    )
+    conn.commit()
+    return AgentResult(key, stage, role, result)
+
+
+def runs_at(conn: sqlite3.Connection, key: str, stage: str) -> int:
+    ensure_schema(conn)
+    return conn.execute("select count(*) from agent_run where key = ? and stage = ?", (key, stage)).fetchone()[0]
+
+
+def tick(
+    conn: sqlite3.Connection, *, repo: Path, runs_dir: Path, access: bool, model: str,
+    test_cmd: str = "", app_cmd: str = "", dry_run: bool = True, runner: claude_run.Runner | None = None,
+    claude_bin: str | None = None, clock: Callable[[], float] = time.time,
+) -> list[dict]:
+    """One pass over the board: run the role for each ticket that needs one.
+
+    A ticket is picked up when it is in an active sprint, not flagged, in a stage with a
+    role, and that stage has had fewer than MAX_RUNS_PER_STAGE runs. dry_run lists the
+    work without running it.
+    """
+    ensure_schema(conn)
+    rows = conn.execute(
+        """select t.key, t.stage, t.flags, s.state as sprint_state
+             from ticket t left join sprint s on s.id = t.sprint_id
+            where t.removed_at is null and t.stage is not null
+            order by t.key"""
+    ).fetchall()
+    actions: list[dict] = []
+    for row in rows:
+        role = STAGE_ROLE.get(row["stage"])
+        if role is None or row["sprint_state"] != "active" or json.loads(row["flags"] or "[]"):
+            continue
+        if runs_at(conn, row["key"], row["stage"]) >= MAX_RUNS_PER_STAGE:
+            actions.append({"key": row["key"], "stage": row["stage"], "role": role,
+                            "skipped": "run limit reached for this stage; needs a human"})
+            continue
+        action = {"key": row["key"], "stage": row["stage"], "role": role, "skipped": None}
+        if not dry_run:
+            if row["stage"] == "ready_for_dev":
+                # Dev pickup: the dev role takes the ticket to in_dev before it works on it.
+                board.move_stage(conn, row["key"], "in_dev", "dev", "dev pickup")
+                action["stage"] = "in_dev"
+            res = run_agent(conn, role, row["key"], repo=repo, runs_dir=runs_dir, access=access,
+                            model=model, test_cmd=test_cmd, app_cmd=app_cmd, claude_bin=claude_bin, runner=runner, clock=clock)
+            action["exit_code"] = res.run.exit_code if res.run else None
+        actions.append(action)
+    return actions

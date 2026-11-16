@@ -552,6 +552,7 @@ FLAGS = ("needs-human", "blocked")
 ALLOWED_MOVES: frozenset[tuple[str, str, str]] = frozenset({
     ("staff", "needs_refinement", "ready_for_dev"),
     ("staff", "in_refinement", "ready_for_dev"),
+    ("dev", "ready_for_dev", "in_dev"),
     ("dev", "ready_for_dev", "pr_open"),
     ("dev", "in_dev", "pr_open"),
     ("dev", "pr_in_review", "in_dev"),
@@ -562,6 +563,8 @@ ALLOWED_MOVES: frozenset[tuple[str, str, str]] = frozenset({
     ("qa", "ready_for_qa", "in_dev"),
     ("qa", "regression", "in_dev"),
     ("harness", "pr_in_review", "ready_for_qa"),
+    ("qa", "regression", "deployed"),
+    ("harness", "qa_approved", "merged"),
 })
 
 
@@ -671,3 +674,58 @@ def status(conn: sqlite3.Connection, now: float) -> dict:
             "select key, flags from ticket where flags != '[]' and removed_at is null order by key")],
         "unmapped_stages": [dict(r) for r in unmapped_stages(conn)],
     }
+
+
+def add_comment(conn: sqlite3.Connection, key: str, author: str, body: str,
+                clock: Callable[[], float] = time.time, origin: str = "agent") -> int:
+    """Record an agent's comment on a ticket. It is queued to Jira by the outbox, not sent here."""
+    if not body.strip():
+        raise BoardError("a comment needs a body")
+    now = int(clock())
+    with conn:
+        if conn.execute("select 1 from ticket where key = ?", (key,)).fetchone() is None:
+            raise BoardError(f"no ticket {key}")
+        cur = conn.execute(
+            "insert into ticket_comment (ticket_key, origin, author, body, created_at) "
+            "values (?, ?, ?, ?, ?)", (key, origin, author, body, now))
+        _event(conn, key, now, author, "comment", None, None, body[:200])
+    return cur.lastrowid
+
+
+def record_approval(conn: sqlite3.Connection, key: str, role: str, head: str,
+                    clock: Callable[[], float] = time.time) -> None:
+    """A reviewer approves the ticket at a specific commit. The merge gate reads these."""
+    if role not in ("pr_review", "qa"):
+        raise BoardError(f"{role!r} cannot approve a ticket")
+    if not head:
+        raise BoardError("an approval needs the commit it covers")
+    with conn:
+        if conn.execute("select 1 from ticket where key = ?", (key,)).fetchone() is None:
+            raise BoardError(f"no ticket {key}")
+        _event(conn, key, int(clock()), role, "approve", None, head, head)
+
+
+def approvals_at(conn: sqlite3.Connection, key: str, head: str) -> set[str]:
+    """The roles that approved this ticket at exactly this commit."""
+    rows = conn.execute(
+        "select distinct actor from ticket_event where ticket_key = ? and kind = 'approve' and detail = ?",
+        (key, head)).fetchall()
+    return {r["actor"] for r in rows}
+
+
+def carry_workflow_statuses(conn: sqlite3.Connection, data: dict) -> dict:
+    """Keep the project's workflow statuses from the last sync.
+
+    A session can only report statuses that some ticket has, so a status with no tickets
+    (for example an empty board column) is missing from the payload. Those statuses come
+    from the project's workflow, which doesn't change between syncs, so carry them forward.
+    """
+    for p in data.get("projects", []):
+        have = {s["name"] for s in p.get("statuses", [])}
+        for row in conn.execute(
+            "select name, category from project_status where project_key = ? and source = 'workflow'",
+            (p["key"],)).fetchall():
+            if row["name"] not in have:
+                p.setdefault("statuses", []).append(
+                    {"name": row["name"], "category": row["category"], "source": "workflow"})
+    return data

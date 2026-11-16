@@ -5,44 +5,62 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>wf · {% block title %}{% endblock %}</title>
   <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js" defer></script>
-  <script src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js" defer></script>
   <style>
-    :root { --bg:#fff; --fg:#1d1d1f; --muted:#6e6e73; --line:#d2d2d7; --accent:#0b57d0; --bad:#b3261e; --ok:#18794e; }
+    :root { --bg:#f6f7f9; --panel:#fff; --fg:#1b1f24; --muted:#6b7280; --line:#e3e6eb;
+            --accent:#2563eb; --accent-fg:#fff; --bad:#b42318; --bad-bg:#fef3f2;
+            --ok:#067647; --ok-bg:#ecfdf3; --warn:#b54708; --warn-bg:#fffaeb; --chip:#eef2f7; }
     @media (prefers-color-scheme: dark) {
-      :root { --bg:#111; --fg:#f2f2f2; --muted:#9a9aa0; --line:#333; --accent:#8ab4f8; --bad:#f2b8b5; --ok:#7fd1a7; }
+      :root:not([data-theme="light"]) { --bg:#0f1115; --panel:#171a21; --fg:#e6e8eb; --muted:#9aa3af;
+            --line:#262b35; --accent:#60a5fa; --accent-fg:#0b1220; --bad:#fca5a5; --bad-bg:#2a1414;
+            --ok:#6ee7b7; --ok-bg:#0f2a20; --warn:#fcd34d; --warn-bg:#2a2410; --chip:#222835; }
     }
-    body { margin:0; font:16px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
-    nav { display:flex; gap:16px; padding:12px 16px; border-bottom:1px solid var(--line); }
-    nav a { color:var(--muted); text-decoration:none; }
-    nav a.on { color:var(--fg); font-weight:600; }
-    main { padding:16px; max-width:900px; margin:0 auto; }
-    h1 { font-size:1.4rem; margin:8px 0; }
-    h2 { font-size:1.05rem; margin:20px 0 8px; }
+    :root[data-theme="dark"] { --bg:#0f1115; --panel:#171a21; --fg:#e6e8eb; --muted:#9aa3af;
+            --line:#262b35; --accent:#60a5fa; --accent-fg:#0b1220; --bad:#fca5a5; --bad-bg:#2a1414;
+            --ok:#6ee7b7; --ok-bg:#0f2a20; --warn:#fcd34d; --warn-bg:#2a2410; --chip:#222835; }
+    * { box-sizing:border-box; }
+    body { margin:0; font:14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+           background:var(--bg); color:var(--fg); }
+    header.top { display:flex; align-items:center; gap:24px; padding:10px 20px; background:var(--panel);
+                 border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; }
+    header.top .brand { font-weight:700; letter-spacing:.02em; }
+    header.top nav { display:flex; gap:4px; }
+    header.top nav a { color:var(--muted); text-decoration:none; padding:6px 10px; border-radius:6px; }
+    header.top nav a.on, header.top nav a:hover { color:var(--fg); background:var(--chip); }
+    main { padding:20px; }
+    h1 { font-size:18px; margin:0 0 4px; }
+    h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:24px 0 8px; }
     .muted { color:var(--muted); }
-    .error { color:var(--bad); }
-    .ok { color:var(--ok); }
-    ul { list-style:none; padding:0; margin:0; }
-    li { padding:10px 0; border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
-    form { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0; }
-    input, select, textarea, button { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
-    textarea { width:100%; min-height:80px; box-sizing:border-box; }
-    button { cursor:pointer; }
-    button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
-    button.danger { color:var(--bad); }
-    button.on { border-color:var(--accent); color:var(--accent); }
-    .filters { display:flex; gap:8px; margin:12px 0; }
-    [x-cloak] { display:none !important; }
-    @media (max-width:520px) { main { padding:16px; } input, select { flex:1 1 100%; } }
+    .bad { color:var(--bad); } .ok { color:var(--ok); } .warn { color:var(--warn); }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .between { justify-content:space-between; }
+    .chip { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:var(--chip); color:var(--muted); }
+    .chip.bad { background:var(--bad-bg); color:var(--bad); }
+    .chip.ok { background:var(--ok-bg); color:var(--ok); }
+    .chip.warn { background:var(--warn-bg); color:var(--warn); }
+    button, .btn { font:inherit; font-size:13px; padding:6px 12px; border-radius:7px; border:1px solid var(--line);
+                   background:var(--panel); color:var(--fg); cursor:pointer; text-decoration:none; display:inline-block; }
+    button:hover, .btn:hover { border-color:var(--accent); }
+    button.primary { background:var(--accent); color:var(--accent-fg); border-color:var(--accent); }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    input[type=checkbox] { margin-right:4px; }
+    form { margin:0; }
+    a { color:var(--accent); }
+    code, pre { font:12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    pre { background:var(--chip); padding:10px; border-radius:8px; overflow:auto; max-height:260px; white-space:pre-wrap; }
+    @media (max-width:640px) { header.top { flex-wrap:wrap; gap:8px; } main { padding:14px; } }
   </style>
 </head>
 <body>
-  <nav>
-    <a href="/board" class="{% if active == 'board' %}on{% endif %}">Sprint</a>
-    <a href="/board/backlog" class="{% if active == 'backlog' %}on{% endif %}">Backlog</a>
-    <a href="/board/outbox" class="{% if active == 'outbox' %}on{% endif %}">Outbox</a>
-    <a href="/runs" class="{% if active == 'runs' %}on{% endif %}">Runs</a>
-    <a href="/links" class="{% if active == 'links' %}on{% endif %}">Links</a>
-  </nav>
+  <header class="top">
+    <span class="brand">wf</span>
+    <nav>
+      <a href="/agents" class="{% if active == 'agents' %}on{% endif %}">Pipeline</a>
+      <a href="/board/outbox" class="{% if active == 'outbox' %}on{% endif %}">Jira queue</a>
+      <a href="/runs" class="{% if active == 'runs' %}on{% endif %}">Runs</a>
+      <a href="/links" class="{% if active == 'links' %}on{% endif %}">Links</a>
+    </nav>
+  </header>
   <main>{% block content %}{% endblock %}</main>
 </body>
 </html>

@@ -24,16 +24,40 @@ from wf.model.claude_code import CLAUDE_BIN, subscription_env
 
 GATEWAY_SERVER = "gateway"
 
+def _tools(*names: str) -> list[str]:
+    return [f"mcp__{GATEWAY_SERVER}__{n}" for n in names]
+
+
+# Each role gets only the gateway tools its job needs. Only dev may edit files.
 PROFILES: dict[str, dict[str, list[str]]] = {
     "dev": {
-        "builtin_tools": ["Read", "Edit", "Write"],
-        "allowed_tools": [
-            "Read", "Edit", "Write",
-            f"mcp__{GATEWAY_SERVER}__get_ticket",
-            f"mcp__{GATEWAY_SERVER}__run_tests",
-            f"mcp__{GATEWAY_SERVER}__push_commit",
-            f"mcp__{GATEWAY_SERVER}__open_pr",
-        ],
+        "builtin_tools": ["Read", "Edit", "Write", "Glob", "Grep"],
+        "allowed_tools": ["Read", "Edit", "Write", "Glob", "Grep"] + _tools(
+            "get_ticket", "move_ticket", "flag_ticket", "run_tests", "commit", "post_comment",
+            "start_app", "fetch_local", "stop_app"),
+    },
+    "pr_review": {
+        "builtin_tools": ["Read", "Glob", "Grep"],
+        "allowed_tools": ["Read", "Glob", "Grep"] + _tools(
+            "get_ticket", "flag_ticket", "run_tests", "approve_ticket", "post_comment", "request_changes"),
+    },
+    "qa": {
+        "builtin_tools": ["Read", "Glob", "Grep"],
+        "allowed_tools": ["Read", "Glob", "Grep"] + _tools(
+            "get_ticket", "move_ticket", "flag_ticket", "run_tests", "approve_ticket", "post_comment",
+            "start_app", "fetch_local", "stop_app"),
+    },
+    "product": {
+        "builtin_tools": ["Read", "Glob", "Grep"],
+        "allowed_tools": ["Read", "Glob", "Grep"] + _tools("get_ticket", "post_comment", "flag_ticket"),
+    },
+    "staff": {
+        "builtin_tools": ["Read", "Glob", "Grep"],
+        "allowed_tools": ["Read", "Glob", "Grep"] + _tools("get_ticket", "move_ticket", "post_comment", "flag_ticket"),
+    },
+    "performance": {
+        "builtin_tools": ["Read", "Glob", "Grep"],
+        "allowed_tools": ["Read", "Glob", "Grep"] + _tools("get_ticket", "run_tests", "post_comment", "flag_ticket"),
     },
 }
 
@@ -79,11 +103,17 @@ def build_argv(
     ]
 
 
-def write_mcp_config(run_dir: Path, gateway_command: list[str]) -> Path:
-    """Write the MCP config that connects the run to the gateway only. Readable by the owner alone."""
+def write_mcp_config(run_dir: Path, gateway_command: list[str], env: dict[str, str] | None = None) -> Path:
+    """Write the MCP config that connects the run to the gateway only. Readable by the owner alone.
+
+    `env` carries the run's scope (role, ticket, database, worktree) into the gateway process.
+    """
     if not gateway_command:
         raise ValueError("gateway command is empty")
-    config = {"mcpServers": {GATEWAY_SERVER: {"command": gateway_command[0], "args": gateway_command[1:]}}}
+    server = {"command": gateway_command[0], "args": gateway_command[1:]}
+    if env:
+        server["env"] = dict(env)
+    config = {"mcpServers": {GATEWAY_SERVER: server}}
     path = run_dir / "gateway.json"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
@@ -113,6 +143,7 @@ def run(
     profile: str,
     gateway_command: list[str],
     access: bool,
+    gateway_env: dict[str, str] | None = None,
     timeout: float = 3600.0,
     claude_bin: str | None = None,
     runner: Runner | None = None,
@@ -129,7 +160,7 @@ def run(
         raise ProviderNotAllowed("the claude CLI is not on PATH")
 
     run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    mcp_config = write_mcp_config(run_dir, gateway_command)
+    mcp_config = write_mcp_config(run_dir, gateway_command, gateway_env)
     spec = PROFILES[profile]
     argv = build_argv(
         claude_bin=claude_bin,

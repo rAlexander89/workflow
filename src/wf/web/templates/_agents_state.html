@@ -1,0 +1,9 @@
+<div id="agents-state">
+  <div class="row between">
+    <span>{% if state.running %}<span class="warn">● Running</span> {{ state.running }}{% else %}<span class="muted">Idle</span>{% endif %}</span>
+    {% if state.last %}<span class="muted">{{ state.last }}</span>{% endif %}
+  </div>
+  <pre>{% for line in state.log %}{{ line }}
+{% else %}Nothing yet.
+{% endfor %}</pre>
+</div>

@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from wf import board, outbox
 from wf.web.app import create_app
+from tests.test_board import clock
 
 STATUSES = [
     {"name": "Backlog", "category": "new"},
@@ -69,7 +70,7 @@ def test_ticket_page_shows_comments_and_history(setup):
     r = client.get("/board/ticket/ABC-1")
     assert r.status_code == 200
     assert "Work ABC-1" in r.text and "Keep the old endpoint." in r.text
-    assert "created" in r.text  # the event log
+    assert "sync update" in r.text  # sync events are hidden behind a count, not dropped
 
 
 def test_unknown_ticket_is_404(setup):
@@ -110,3 +111,17 @@ def test_empty_board_says_never_synced(tmp_path):
     app = create_app(config_path=tmp_path / "workflow.json", db_path=tmp_path / "empty.sqlite")
     r = TestClient(app).get("/board")
     assert r.status_code == 200 and "Never synced" in r.text
+
+
+def test_answer_records_the_human_reply_and_clears_the_flag(setup):
+    client, db = setup
+    c = board.connect(db)
+    board.set_flag(c, "ABC-1", "needs-human", "dev", "which endpoint?", clock=clock)
+    c.close()
+    r = client.post("/board/ticket/ABC-1/answer", data={"answer": "Use /login, redirect is handled there."},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    c = board.connect(db)
+    body, origin = c.execute("select body, origin from ticket_comment where ticket_key='ABC-1' order by id desc limit 1").fetchone()
+    assert body == "Use /login, redirect is handled there." and origin == "user"
+    assert c.execute("select flags from ticket where key='ABC-1'").fetchone()[0] == "[]"

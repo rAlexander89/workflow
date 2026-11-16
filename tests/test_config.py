@@ -51,6 +51,8 @@ def test_load_missing_file_is_empty(tmp_path):
             "api_key_env": "ANTHROPIC_API_KEY",
             "claude_code_access": False,
         },
+        "agents": {"runs_dir": "~/wf-runs", "test_cmd": "make test", "model": "claude-sonnet-5-5", "app_cmd": ""},
+        "bots": {"enabled": False, "domain": "", "roles": [], "credentials_file": ""},
     }
 
 

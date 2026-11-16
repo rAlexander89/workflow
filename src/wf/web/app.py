@@ -194,4 +194,7 @@ def create_app(
     from wf.web.board_views import mount_board
 
     mount_board(app, db_path)
+    from wf.web.agents_views import mount_agents
+
+    mount_agents(app, db_path, config_path)
     return app

@@ -1,37 +1,113 @@
 {% extends "base.html" %}
 {% block title %}{{ ticket.key }}{% endblock %}
 {% block content %}
-<h1>{{ ticket.key }} · {{ ticket.summary }}</h1>
-<p class="muted">{{ ticket.project_key }} · {{ ticket.issue_type or 'issue' }} · Jira: {{ ticket.jira_status }}
-  · stage: {{ ticket.stage or '(none)' }} · sprint: {{ ticket.sprint_id or 'backlog' }}
-  {% if ticket.removed_at %}· <span class="error">no longer in scope</span>{% endif %}</p>
+<style>
+  .head { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; }
+  .strip { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 4px; }
+  .step { font-size:12px; padding:4px 10px; border-radius:999px; background:var(--chip); color:var(--muted); }
+  .step.done { color:var(--ok); }
+  .step.current { background:var(--warn-bg); color:var(--warn); font-weight:600; }
+  .cols { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px; margin-top:14px; }
+  .item { padding:8px 0; border-bottom:1px solid var(--line); font-size:13px; }
+  .item:last-child { border-bottom:0; }
+  .item .meta { color:var(--muted); font-size:12px; }
+  details summary { cursor:pointer; color:var(--muted); font-size:12px; }
+  details[open] summary { margin-bottom:6px; }
+  .callout { border:1px solid var(--bad); background:var(--bad-bg); border-radius:10px; padding:12px 14px; margin-top:12px; }
+  .callout b { color:var(--bad); }
+  @media (max-width:760px) { .cols { grid-template-columns:1fr; } }
+</style>
 
-{% if ticket.description %}<h2>Description</h2><p style="white-space:pre-wrap">{{ ticket.description }}</p>{% endif %}
-{% if ticket.acceptance %}<h2>Acceptance criteria</h2><p style="white-space:pre-wrap">{{ ticket.acceptance }}</p>{% endif %}
-
-<h2>Flags</h2>
-{% if ticket.flag_list %}
-<ul>{% for f in ticket.flag_list %}
-  <li><span class="error">{{ f }}</span>
+<div class="head">
+  <div>
+    <div class="muted"><a href="/agents">Pipeline</a> / {{ ticket.key }}</div>
+    <h1>{{ ticket.summary }}</h1>
+    <div class="row" style="gap:6px">
+      <span class="chip">Jira: {{ ticket.jira_status }}</span>
+      <span class="chip">{{ ticket.issue_type or 'issue' }}</span>
+      <span class="chip">stage: {{ ticket.stage or 'none' }}</span>
+    </div>
+  </div>
+  <div class="row">
+    {% if ticket.flag_list %}
     <form method="post" action="/board/ticket/{{ ticket.key }}/flag/clear">
-      <input type="hidden" name="flag" value="{{ f }}"><button class="danger">Clear</button>
-    </form></li>
-{% endfor %}</ul>
-{% else %}<p class="muted">None.</p>{% endif %}
+      <input type="hidden" name="flag" value="{{ ticket.flag_list[0] }}"><button>Clear flag</button>
+    </form>
+    {% elif next_role %}
+    <form method="post" action="/agents/run/{{ ticket.key }}"><button class="primary">Run {{ next_role }}</button></form>
+    {% endif %}
+  </div>
+</div>
 
-<h2>Jira outbox</h2>
-<ul>{% for o in outbox_items %}
-  <li><span>{{ o.target_stage }} <span class="muted">{{ o.status }}</span></span><span class="muted">{{ o.detail or '' }}</span></li>
-{% else %}<li class="muted">Nothing queued.</li>{% endfor %}</ul>
+{% if ticket.flag_list %}
+<div class="callout">
+  <b>Needs you</b> · {{ ticket.flag_list | join(', ') }}
+  <div style="margin-top:4px">{{ flag_reason }}</div>
+  <form method="post" action="/board/ticket/{{ ticket.key }}/answer" style="margin-top:10px;display:block">
+    <textarea name="answer" rows="3" required placeholder="Answer the agent here. It reads this on its next run." style="width:100%;font:inherit;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--fg)"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="primary">Send answer and clear flag</button>
+      <span class="meta">The flag clears, then you can run the next step.</span>
+    </div>
+  </form>
+</div>
+{% endif %}
 
-<h2>Comments</h2>
-<ul>{% for c in comments %}
-  <li><span><strong>{{ c.author }}</strong> <span class="muted">({{ c.origin }})</span> {{ c.body }}</span></li>
-{% else %}<li class="muted">No comments synced.</li>{% endfor %}</ul>
+<div class="strip">
+  {% for s in stages %}<span class="step {{ s.state }}">{{ s.label }}</span>{% endfor %}
+</div>
 
-<h2>History</h2>
-<ul>{% for e in events %}
-  <li><span>{{ e.kind }} · {{ e.actor }}{% if e.from_value or e.to_value %} · {{ e.from_value or '' }} → {{ e.to_value or '' }}{% endif %}</span>
-    <span class="muted">{{ e.detail or '' }}</span></li>
-{% endfor %}</ul>
+<div class="cols">
+  <div>
+    <h2>Agent runs</h2>
+    <div class="panel">
+      {% for r in runs %}
+      <div class="item">
+        <b>{{ r.role }}</b> <span class="muted">on {{ r.stage }}</span>
+        <span class="chip {{ 'ok' if r.exit_code == 0 else 'bad' }}">{{ 'ok' if r.exit_code == 0 else 'failed' }}{% if r.timed_out %}, timed out{% endif %}</span>
+        <div class="meta">{{ r.when }} · <code>{{ r.output_path }}</code></div>
+      </div>
+      {% else %}<div class="muted">No runs yet.</div>{% endfor %}
+    </div>
+
+    <h2>Comments</h2>
+    <div class="panel">
+      {% for c in comments %}
+      <div class="item">
+        <b>{{ c.author }}</b> <span class="meta">{{ c.origin }}</span>
+        <details><summary>{{ c.preview }}</summary><pre>{{ c.body }}</pre></details>
+      </div>
+      {% else %}<div class="muted">None.</div>{% endfor %}
+    </div>
+
+    {% if outbox_items %}
+    <h2>Jira moves</h2>
+    <div class="panel">
+      {% for i in outbox_items %}
+      <div class="item">→ {{ i.target_stage }} <span class="chip">{{ i.status }}</span></div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  <div>
+    <h2>History</h2>
+    <div class="panel">
+      {% for e in events[:12] %}
+      <div class="item">
+        <div><b>{{ e.kind }}</b> <span class="meta">{{ e.actor }} · {{ e.when }}</span></div>
+        {% if e.kind == 'stage' %}<div>{{ e.from_value }} → {{ e.to_value }}</div>
+        {% elif e.kind == 'comment' %}<div class="meta">{{ (e.detail or '').splitlines()[0][:140] if e.detail else '' }}</div>
+        {% elif e.kind == 'flag' %}<div>{{ e.to_value }}{% if e.detail %} — <span class="meta">{{ e.detail[:200] }}</span>{% endif %}</div>
+        {% elif e.kind == 'unflag' %}<div class="meta">{{ e.from_value }} cleared</div>
+        {% else %}<div class="meta">{{ e.detail or e.to_value or '' }}</div>{% endif %}
+      </div>
+      {% else %}<div class="muted">No history.</div>{% endfor %}
+      {% if events|length > 12 %}<details><summary>{{ events|length - 12 }} older events</summary>
+        {% for e in events[12:] %}<div class="item"><b>{{ e.kind }}</b> <span class="meta">{{ e.actor }} · {{ e.when }}</span> <span class="meta">{{ e.from_value or '' }}{% if e.to_value %} → {{ e.to_value }}{% endif %}</span></div>{% endfor %}
+      </details>{% endif %}
+      {% if noise_count %}<div class="meta" style="margin-top:8px">{{ noise_count }} sync update{{ '' if noise_count == 1 else 's' }} hidden</div>{% endif %}
+    </div>
+  </div>
+</div>
 {% endblock %}

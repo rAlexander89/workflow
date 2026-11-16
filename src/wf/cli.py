@@ -254,6 +254,15 @@ def cmd_init(args) -> int:
 
     print("\nNext: in your Claude session, run the Jira sync (see docs/sync-format.md),")
     print("then `wf sync payload.json` and `wf doctor`.")
+    if interactive:
+        from wf import bots as _bots
+
+        c_ = cfgmod.load(path)
+        if not c_.bots.enabled:
+            result = _bots.setup_interactive(c_.bots.domain or "fokist.com")
+            if result:
+                c_.bots = cfgmod.BotsConfig(**result)
+                cfgmod.save(c_, path)
     return 0
 
 
@@ -317,6 +326,22 @@ def cmd_status(args) -> int:
         print(f"flagged: {f['key']} {f['flags']}")
     for u in s["unmapped_stages"]:
         print(f"blocked: {u['project_key']} stage {u['stage']!r}: {u['reason']}")
+    return 0
+
+
+def cmd_pickup(args) -> int:
+    import json
+
+    from wf import board, pickup
+
+    conn = board.connect(_db_path(args))
+    try:
+        plan = pickup.plan_pickup(conn, apply=args.apply)
+    finally:
+        conn.close()
+    print(json.dumps(plan.to_dict(), indent=2))
+    if not args.apply:
+        print("dry run: nothing was moved. Re-run with --apply to move the picked tickets.", file=sys.stderr)
     return 0
 
 
@@ -443,6 +468,138 @@ def cmd_model_set(args) -> int:
     c.model = replace(c.model, **updates)
     cfgmod.save(c, path)
     print(f"model set: provider={c.model.provider} model={c.model.model}")
+    return 0
+
+
+def _repo_path(c, name: str | None) -> Path:
+    repos = {r.name: r for r in c.repos}
+    if not repos:
+        raise SystemExit("error: no internal repo is linked; run `wf link repo NAME PATH` first")
+    if name is None:
+        if len(repos) > 1:
+            raise SystemExit(f"error: several repos are linked; pick one with --repo ({', '.join(sorted(repos))})")
+        name = next(iter(repos))
+    if name not in repos:
+        raise SystemExit(f"error: no linked repo named {name!r}")
+    return Path(repos[name].path)
+
+
+def _runs_dir(c, given: str | None) -> Path:
+    import os
+
+    return Path(given or os.path.expanduser(c.agents.runs_dir)).resolve()
+
+
+def cmd_agents_tick(args) -> int:
+    import json
+    import shutil
+
+    from wf import agents, board, claude_run
+
+    c = cfgmod.load(_cfg_path(args))
+    conn = board.connect(_db_path(args))
+    try:
+        actions = agents.tick(
+            conn, repo=_repo_path(c, args.repo), runs_dir=_runs_dir(c, args.runs), access=c.model.claude_code_access,
+            model=args.model or c.agents.model, test_cmd=args.test_cmd or c.agents.test_cmd, app_cmd=c.agents.app_cmd, dry_run=not args.apply,
+            claude_bin=shutil.which(claude_run.CLAUDE_BIN),
+        )
+    except (claude_run.ProviderNotAllowed, ValueError, board.BoardError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    finally:
+        conn.close()
+    print(json.dumps(actions, indent=2))
+    if not args.apply:
+        print("dry run: nothing was run. Re-run with --apply to run these agents.", file=sys.stderr)
+    return 0
+
+
+def cmd_agents_merge(args) -> int:
+    from wf import board, merge
+
+    c = cfgmod.load(_cfg_path(args))
+    conn = board.connect(_db_path(args))
+    try:
+        head = merge.merge(conn, args.key, repo=_repo_path(c, args.repo), runs_dir=_runs_dir(c, args.runs),
+                           test_cmd=args.test_cmd or c.agents.test_cmd)
+    except (merge.MergeBlocked, board.BoardError) as e:
+        print(f"blocked: {e}", file=sys.stderr)
+        return 2
+    finally:
+        conn.close()
+    print(f"{args.key} merged at {head[:8]}")
+    return 0
+
+
+def cmd_agents_publish(args) -> int:
+    from wf import board, github_agent
+
+    c = cfgmod.load(_cfg_path(args))
+    conn = board.connect(_db_path(args))
+    try:
+        url = github_agent.open_pull_request(conn, args.key, repo=_repo_path(c, args.repo),
+                                             confirm=args.confirm)
+    except (github_agent.PublishBlocked, board.BoardError) as e:
+        print(f"blocked: {e}", file=sys.stderr)
+        return 2
+    finally:
+        conn.close()
+    print(url)
+    return 0
+
+
+def cmd_bots_setup(args) -> int:
+    from wf import bots
+
+    path = _cfg_path(args)
+    c = cfgmod.load(path)
+    domain = args.domain or c.bots.domain or "fokist.com"
+    if args.yes:
+        written = bots.write_credentials(bots.credentials_path(),
+                                         {r: {"email": bots.account_email(r, domain)} for r in bots.ROLES})
+        print(f"credentials written to {bots.credentials_path()} (new: {', '.join(written) or 'none'})")
+        result = {"enabled": True, "domain": domain, "roles": list(bots.ROLES),
+                  "credentials_file": str(bots.credentials_path())}
+    else:
+        result = bots.setup_interactive(domain)
+    if result:
+        c.bots = cfgmod.BotsConfig(**result)
+        cfgmod.save(c, path)
+    return 0
+
+
+def cmd_bots_permissions(args) -> int:
+    from wf import bots
+
+    print("Bots may:")
+    for line in bots.ALLOWED:
+        print(f"  + {line}")
+    print("Bots may not:")
+    for line in bots.NOT_ALLOWED:
+        print(f"  - {line}")
+    return 0
+
+
+def cmd_env(args) -> int:
+    from wf import envs
+
+    c = cfgmod.load(_cfg_path(args))
+    state_dir = _runs_dir(c) / "envs"
+    if args.env_cmd == "status":
+        st = envs.status(state_dir, args.name or "app")
+        print("not running" if not st or not st["running"] else f"running at {st['url']} (pid {st['pid']})")
+        return 0
+    if args.env_cmd == "down":
+        print("stopped" if envs.down(args.name or "app", state_dir=state_dir) else "nothing to stop")
+        return 0
+    repo = _repo_path(c, args.repo)
+    try:
+        st = envs.up(args.name or "app", repo=repo, app_cmd=c.agents.app_cmd, state_dir=state_dir)
+    except (ValueError, RuntimeError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(f"running at {st['url']} (pid {st['pid']})")
     return 0
 
 
@@ -598,6 +755,55 @@ def build_parser() -> argparse.ArgumentParser:
     st = sub.add_parser("status", help="when the board last synced, what is in scope, and what is blocked")
     st.add_argument("--db", default=None, help="SQLite file (default: $WF_DB or ./wf.sqlite)")
     st.set_defaults(func=cmd_status)
+
+    ag = sub.add_parser("agents", help="run the agents: tick over the board, merge, or publish")
+    ag_sub = ag.add_subparsers(dest="agents_cmd", required=True)
+    at = ag_sub.add_parser("tick", help="run the role for each ticket that needs one (dry run unless --apply)")
+    at.add_argument("--apply", action="store_true")
+    at.add_argument("--repo", default=None, help="linked internal repo name")
+    at.add_argument("--runs", default=None, help="directory for worktrees and run output (default: config)")
+    at.add_argument("--test-cmd", default=None, help="shell command that runs the project's tests (default: config)")
+    at.add_argument("--model", default=None)
+    at.add_argument("--db", default=None)
+    at.add_argument("--config", default=None)
+    at.set_defaults(func=cmd_agents_tick)
+    am = ag_sub.add_parser("merge", help="merge an approved ticket into the internal main")
+    am.add_argument("key")
+    am.add_argument("--repo", default=None)
+    am.add_argument("--runs", default=None)
+    am.add_argument("--test-cmd", default=None, help="default: config")
+    am.add_argument("--db", default=None)
+    am.add_argument("--config", default=None)
+    am.set_defaults(func=cmd_agents_merge)
+    ap = ag_sub.add_parser("publish", help="open a real GitHub PR for a fully passed ticket (needs --confirm)")
+    ap.add_argument("key")
+    ap.add_argument("--repo", default=None)
+    ap.add_argument("--confirm", action="store_true")
+    ap.add_argument("--db", default=None)
+    ap.add_argument("--config", default=None)
+    ap.set_defaults(func=cmd_agents_publish)
+
+    bt = sub.add_parser("bots", help="bot accounts: set them up, or see what they may do")
+    bt_sub = bt.add_subparsers(dest="bots_cmd", required=True)
+    bs = bt_sub.add_parser("setup", help="ask whether to create bot credentials, then create them")
+    bs.add_argument("--domain", default=None, help="accounts are <role>@<domain> (default: fokist.com)")
+    bs.add_argument("--yes", action="store_true", help="skip the question and create them")
+    bs.add_argument("--config", default=None)
+    bs.set_defaults(func=cmd_bots_setup)
+    bp = bt_sub.add_parser("permissions", help="show what the bots may and may not do")
+    bp.set_defaults(func=cmd_bots_permissions)
+
+    ev = sub.add_parser("env", help="local environment: start or stop a project's app for the bots and you")
+    ev.add_argument("env_cmd", choices=["up", "down", "status"])
+    ev.add_argument("--repo", default=None, help="linked repo to run (up)")
+    ev.add_argument("--name", default=None, help="environment name (default: app)")
+    ev.add_argument("--config", default=None)
+    ev.set_defaults(func=cmd_env)
+
+    pk = sub.add_parser("pickup", help="dev pickup: move ready tickets to in_dev (dry run unless --apply)")
+    pk.add_argument("--apply", action="store_true", help="actually move the tickets")
+    pk.add_argument("--db", default=None, help="SQLite file (default: $WF_DB or ./wf.sqlite)")
+    pk.set_defaults(func=cmd_pickup)
 
     mv = sub.add_parser("move", help="move a ticket to an internal stage (the harness or an agent role)")
     mv.add_argument("key")
