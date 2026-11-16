@@ -77,8 +77,7 @@ class Scope:
         self.app_url = env.get("WF_APP_URL", "")  # an app already running; used instead of starting one
         self.bot_email = env.get("WF_BOT_EMAIL", "")  # this run's app account
         self.bot_credentials = Path(env["WF_BOT_CREDENTIALS"]) if env.get("WF_BOT_CREDENTIALS") else None
-        self.bot_api = env.get("WF_BOT_API", "http://127.0.0.1:3001")  # the local app's JSON auth API
-        self.bot_host = env.get("WF_BOT_HOST", "localhost:3001")  # the app routes by Host header
+        self.bot_app = env.get("WF_BOT_APP", "http://127.0.0.1:3002")  # the local app; bots sign in through its login form
         if not self.role or not self.key:
             raise ValueError("WF_ROLE and WF_KEY are required")
 
@@ -253,39 +252,54 @@ class Gateway:
                 return line.split("=", 1)[1]
         raise ValueError(f"no password for the {self.scope.role} bot in the credentials file")
 
-    def _bot_request(self, method: str, path: str, body: dict | None = None) -> tuple[int, str]:
+    def _bot_opener(self):
         import http.cookiejar
-        import urllib.error
         import urllib.request
 
         if self._bot_jar is None:
             self._bot_jar = http.cookiejar.CookieJar()
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self._bot_jar))
-        data = json.dumps(body).encode() if body is not None else None
-        headers = {"Content-Type": "application/json", "Host": self.scope.bot_host}
-        req = urllib.request.Request(self.scope.bot_api.rstrip("/") + path, data=data, method=method, headers=headers)
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a, **k):
+                return None  # keep the 303 so the login result is visible
+
+        return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self._bot_jar), NoRedirect)
+
+    def _bot_form(self, path: str, form: dict) -> tuple[int, str, str]:
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        data = urllib.parse.urlencode(form).encode()
+        req = urllib.request.Request(self.scope.bot_app.rstrip("/") + path, data=data, method="POST")
         try:
-            with opener.open(req, timeout=20) as resp:
-                return resp.status, resp.read().decode(errors="replace")
+            with self._bot_opener().open(req, timeout=20) as resp:
+                return resp.status, resp.headers.get("Location", ""), ""
         except urllib.error.HTTPError as e:
-            return e.code, e.read().decode(errors="replace")
+            return e.code, e.headers.get("Location", ""), ""
 
     def bot_login(self, _args: dict) -> dict:
+        import urllib.error
+
         if not self.scope.bot_email:
             raise ValueError("this run has no bot account")
         password = self._bot_password()
-        status, _ = self._bot_request("POST", "/api/auth/login", {"email": self.scope.bot_email, "password": password})
-        if status != 200:
+        status, location, _ = self._bot_form("/login", {"email": self.scope.bot_email, "password": password})
+        if status != 303 or location.startswith("/login"):
             raise PermissionError(f"login failed for {self.scope.bot_email} (HTTP {status})")
-        me_status, me = self._bot_request("GET", "/api/auth/me")
-        if me_status != 200 or self.scope.bot_email not in me:
-            raise PermissionError("logged in, but the session does not belong to this bot")
+        # The session cookie must open a page that needs a login.
+        try:
+            with self._bot_opener().open(self.scope.bot_app.rstrip("/") + "/search", timeout=20) as resp:
+                if resp.status != 200:
+                    raise PermissionError("logged in, but the session is not accepted")
+        except urllib.error.HTTPError as e:
+            raise PermissionError(f"logged in, but the session check failed (HTTP {e.code})")
         return {"logged_in": True, "email": self.scope.bot_email}
 
     def bot_logout(self, _args: dict) -> dict:
-        status, _ = self._bot_request("POST", "/api/auth/logout", {})
+        status, _, _ = self._bot_form("/logout", {})
         self._bot_jar = None
-        return {"logged_out": status in (200, 204)}
+        return {"logged_out": status in (200, 303)}
 
     def open_pr(self, _args: dict) -> dict:
         raise PermissionError("agents may not open pull requests; the GitHub agent does this "

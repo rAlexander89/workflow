@@ -1,6 +1,7 @@
 import http.server
 import json
 import threading
+import urllib.parse
 
 import pytest
 
@@ -10,35 +11,38 @@ PASSWORD = "Sup3r-secret!pw"
 
 
 class FakeAuthAPI(http.server.BaseHTTPRequestHandler):
+    """Acts like the Fokist HTML login: a form POST sets a session cookie and redirects."""
     sessions = set()
 
-    def _send(self, code, body):
-        data = json.dumps(body).encode()
+    def _reply(self, code, body=b"", headers=()):
         self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        if code == 200 and "email" in body:
-            self.send_header("Set-Cookie", "sid=ok; Path=/")
+        for k, v in headers:
+            self.send_header(k, v)
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(data)
+        self.wfile.write(body)
+
+    def _has_session(self):
+        return "sid=ok" in (self.headers.get("Cookie") or "") and "sid" in FakeAuthAPI.sessions
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(n) or b"{}")
-        if self.path == "/api/auth/login":
-            if body.get("email") == "qa@fokist.com" and body.get("password") == PASSWORD:
+        form = urllib.parse.parse_qs(self.rfile.read(n).decode())
+        if self.path == "/login":
+            ok = form.get("email") == ["qa@fokist.com"] and form.get("password") == [PASSWORD]
+            if ok:
                 FakeAuthAPI.sessions.add("sid")
-                return self._send(200, {"email": body["email"]})
-            return self._send(401, {"error": "bad"})
-        if self.path == "/api/auth/logout":
+                return self._reply(303, headers=[("Location", "/search"), ("Set-Cookie", "sid=ok; Path=/")])
+            return self._reply(200, b"<form>login</form>")
+        if self.path == "/logout":
             FakeAuthAPI.sessions.clear()
-            return self._send(200, {"ok": True})
-        self._send(404, {})
+            return self._reply(303, headers=[("Location", "/login")])
+        self._reply(404)
 
     def do_GET(self):
-        if self.path == "/api/auth/me" and "sid" in FakeAuthAPI.sessions:
-            return self._send(200, {"email": "qa@fokist.com"})
-        self._send(401, {"error": "no session"})
+        if self.path == "/search" and self._has_session():
+            return self._reply(200, b"<h1>search</h1>")
+        self._reply(303, headers=[("Location", "/login")])
 
     def log_message(self, *a):
         pass
@@ -64,7 +68,7 @@ def creds(tmp_path):
 def gw(api, creds, role="qa", email="qa@fokist.com"):
     return gateway_server.Gateway(gateway_server.Scope({
         "WF_ROLE": role, "WF_KEY": "ABC-1", "WF_DB": "x.sqlite", "WF_BOT_EMAIL": email,
-        "WF_BOT_CREDENTIALS": str(creds), "WF_BOT_API": api, "WF_BOT_HOST": "localhost:3001"}))
+        "WF_BOT_CREDENTIALS": str(creds), "WF_BOT_APP": api}))
 
 
 def test_bot_logs_in_and_the_password_is_never_returned(api, creds):
@@ -77,7 +81,7 @@ def test_bot_logs_in_and_the_password_is_never_returned(api, creds):
 
 def test_wrong_bot_password_is_refused_without_leaking_it(api, creds):
     g = gw(api, creds, role="dev", email="dev@fokist.com")
-    with pytest.raises(PermissionError, match="HTTP 401"):
+    with pytest.raises(PermissionError, match="login failed"):
         g.bot_login({})
 
 
