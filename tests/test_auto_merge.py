@@ -77,3 +77,20 @@ def test_a_missing_code_performance_review_stops_the_merge(tmp_path):
     c.execute("delete from ticket_event where ticket_key = ? and kind = 'approve' and actor = 'perf_review'", (ISSUE,))
     c.commit()
     assert github_agent.merge_when_clear(c, repo=tmp_path, runner=Git(), status=green()) == []
+
+
+def test_the_merge_bot_reads_the_pr_itself_not_the_local_branch(tmp_path):
+    c = setup(tmp_path)
+    # the local branch is clean, but the PR on GitHub carries another ticket's commits
+    status = lambda url: {"ok": True, "state": "OPEN", "merged": False, "checks": "passed",
+                          "head": "abc123", "commit_subjects": ["Merge branch 'main' of github", "FKST-29: fix"]}
+    git = Git(subjects="FKST-29: fix login heading")
+    assert github_agent.merge_when_clear(c, repo=tmp_path, runner=git, status=status) == []
+    assert not any(call[:3] == ["gh", "pr", "merge"] for call in git.calls)
+
+
+def test_a_pr_whose_head_is_not_the_branch_head_is_not_merged(tmp_path):
+    c = setup(tmp_path)
+    status = lambda url: {"ok": True, "state": "OPEN", "merged": False, "checks": "passed",
+                          "head": "other", "commit_subjects": ["FKST-29: fix"]}
+    assert github_agent.merge_when_clear(c, repo=tmp_path, runner=Git(), status=status) == []

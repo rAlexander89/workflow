@@ -31,7 +31,8 @@ def pr_status(url: str, *, runner: Callable[..., subprocess.CompletedProcess] = 
     hit = _cache.get(url)
     if hit and now() - hit[0] < CACHE_SECONDS:
         return hit[1]
-    proc = runner(["gh", "pr", "view", url, "--json", "state,mergedAt,mergeStateStatus,statusCheckRollup"],
+    proc = runner(["gh", "pr", "view", url, "--json",
+                   "state,mergedAt,mergeStateStatus,statusCheckRollup,headRefOid,commits"],
                   capture_output=True, text=True, check=False)
     if proc.returncode != 0:
         result = {"ok": False, "error": (proc.stderr or "gh failed").strip()[-200:]}
@@ -43,6 +44,8 @@ def pr_status(url: str, *, runner: Callable[..., subprocess.CompletedProcess] = 
             "merged": bool(data.get("mergedAt")),
             "checks": checks_state(data.get("statusCheckRollup") or []),
             "merge_state": data.get("mergeStateStatus", ""),
+            "head": data.get("headRefOid", ""),
+            "commit_subjects": [c.get("messageHeadline", "") for c in data.get("commits") or []],
         }
     _cache[url] = (now(), result)
     return result

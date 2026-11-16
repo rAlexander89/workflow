@@ -79,6 +79,16 @@ def assess(conn: sqlite3.Connection, key: str, *, repo: Path, runner: Runner | N
         elif st.get("checks") == "none":
             reasons.append("GitHub reports no checks on this PR")
 
+    # The PR itself is what gets merged, so its own commits and head are what must be checked.
+    if st.get("ok"):
+        stray_on_pr = [s for s in st.get("commit_subjects", []) if key not in s]
+        if stray_on_pr:
+            reasons.append(f"the PR itself carries {len(stray_on_pr)} commit(s) that are not {key}, "
+                           f"starting with: {stray_on_pr[0][:70]}")
+        head_proc = run(["git", "rev-parse", "--verify", "--quiet", agents.branch_for(key)], repo)
+        if head_proc.returncode == 0 and st.get("head") and head_proc.stdout.strip() != st["head"]:
+            reasons.append("the PR's head is not the branch's current commit; the PR needs updating first")
+
     head_proc = run(["git", "rev-parse", "--verify", "--quiet", agents.branch_for(key)], repo)
     if head_proc.returncode != 0:
         reasons.append("the ticket's branch is missing")
