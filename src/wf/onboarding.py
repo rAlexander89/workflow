@@ -20,6 +20,7 @@ class RepoCandidate:
     remote: str  # "owner/name" from origin, or "" if there is no origin
     last_commit: int  # unix time of the newest commit, 0 if none
     my_commits: int  # commits made with the user's git email
+    remote_url: str = ""  # the raw origin URL, so the host can be told apart (github.com or GitLab)
 
 
 def _git(path: Path, *args: str) -> str | None:
@@ -75,6 +76,7 @@ def describe(path: Path, email: str) -> RepoCandidate:
         remote=parse_remote(remote),
         last_commit=int(last) if last and last.isdigit() else 0,
         my_commits=int(mine) if mine and mine.isdigit() else 0,
+        remote_url=remote,
     )
 
 

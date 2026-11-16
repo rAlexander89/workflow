@@ -173,6 +173,35 @@ def cmd_backlog(args) -> int:
     return 0
 
 
+SOURCE_OPTIONS = [
+    ("1", "Local GitLab (on this network, e.g. your home server)"),
+    ("2", "Remote GitLab (gitlab.com or another hosted GitLab)"),
+    ("3", "Local git only (no hosted remote)"),
+    ("4", "Remote GitHub (github.com)"),
+]
+
+
+def _source_control(c, interactive: bool) -> tuple[str, str, str]:
+    """Ask where the repo's code is hosted. Returns (forge, host, org/repo)."""
+    if not interactive:
+        if c.remote and "github.com" in (c.remote_url or ""):
+            return "github", "", c.remote
+        if c.remote_url:
+            return "gitlab", "", c.remote
+        return "local", "", ""
+    print(f"\nWhere is the source control for {c.path}?")
+    for key, label in SOURCE_OPTIONS:
+        print(f"  {key}. {label}")
+    choice = _ask("Choose 1-4", "4" if c.remote_url and "github.com" in c.remote_url else "3")
+    if choice == "3":
+        return "local", "", ""
+    if choice == "4":
+        return "github", "", c.remote or _ask("Org/repo it pushes to (owner/name)", "")
+    host = _ask("GitLab host (e.g. gitlab.home.lan or gitlab.com)", "gitlab.com")
+    project = c.remote or _ask("GitLab project path (group/project)", "")
+    return "gitlab", host, project
+
+
 def _ask(prompt: str, default: str = "") -> str:
     shown = f"{prompt} [{default}]: " if default else f"{prompt}: "
     return input(shown).strip() or default
@@ -232,18 +261,17 @@ def cmd_init(args) -> int:
         print("Nothing picked. Run `wf init` again when you're ready.")
         return 0
 
-    # 4. Link them, with the org/repo each one pushes to.
+    # 4. Link them, with where each one's code is hosted.
     cfg = cfgmod.load(path)
     for n in chosen:
         c = candidates[n - 1]
         name = c.name
         if interactive:
             name = _ask(f"Name for {c.path}", c.name)
-        remote = c.remote
-        if not remote and interactive:
-            remote = _ask("Org/repo it pushes to (owner/name)", "")
-        if cfg.add_repo(name, c.path, remote):
-            print(f"linked {name} at {c.path} -> {remote or 'no remote yet'}")
+        forge_name, host, remote = _source_control(c, interactive)
+        if cfg.add_repo(name, c.path, remote, forge=forge_name, host=host):
+            where = {"github": "GitHub", "gitlab": f"GitLab at {host}", "local": "local git only"}[forge_name]
+            print(f"linked {name} at {c.path} -> {where}{' ' + remote if remote else ''}")
         else:
             print(f"{name} is already linked")
     try:

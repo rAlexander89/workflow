@@ -79,3 +79,23 @@ def test_init_rejects_a_pick_that_is_not_in_the_list(tmp_path, capsys, monkeypat
     cfg = tmp_path / "workflow.json"
     assert cli.main(["--config", str(cfg), "init", "--mcp-connected", "--root", str(root), "--pick", "9"]) == 2
     assert "not one of the numbers" in capsys.readouterr().err
+
+
+def test_source_control_non_interactive_infers_the_forge():
+    from wf import cli, onboarding
+    gh = onboarding.RepoCandidate(path="/x", name="a", remote="o/a", last_commit=0, my_commits=0,
+                                  remote_url="git@github.com:o/a.git")
+    gl = onboarding.RepoCandidate(path="/y", name="b", remote="g/b", last_commit=0, my_commits=0,
+                                  remote_url="git@gitlab.home.lan:g/b.git")
+    local = onboarding.RepoCandidate(path="/z", name="c", remote="", last_commit=0, my_commits=0, remote_url="")
+    assert cli._source_control(gh, interactive=False) == ("github", "", "o/a")
+    assert cli._source_control(gl, interactive=False) == ("gitlab", "", "g/b")
+    assert cli._source_control(local, interactive=False) == ("local", "", "")
+
+
+def test_source_control_interactive_asks_the_four_options(monkeypatch):
+    from wf import cli, onboarding
+    answers = iter(["2", "gitlab.home.lan", "g/b"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    c = onboarding.RepoCandidate(path="/y", name="b", remote="", last_commit=0, my_commits=0, remote_url="")
+    assert cli._source_control(c, interactive=True) == ("gitlab", "gitlab.home.lan", "g/b")

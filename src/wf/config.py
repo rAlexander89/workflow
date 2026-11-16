@@ -81,8 +81,13 @@ class Config:
 
     # --- repos -------------------------------------------------------------
 
-    def add_repo(self, name: str, path: str, remote: str = "") -> bool:
-        """Returns False if a repo with this name is already linked."""
+    def add_repo(self, name: str, path: str, remote: str = "", forge: str = "github", host: str = "") -> bool:
+        """Returns False if a repo with this name is already linked.
+
+        forge: "github", "gitlab" (hosted or on this network, see host), or "local" (plain git, no PR host).
+        """
+        if forge not in ("github", "gitlab", "local"):
+            raise ConfigError(f"forge must be github, gitlab, or local, got {forge!r}")
         name = name.strip()
         path = path.strip()
         if not REPO_NAME_RE.match(name):
@@ -91,7 +96,7 @@ class Config:
             raise ConfigError("repo path must not be empty")
         if any(r.name == name for r in self.repos):
             return False
-        self.repos.append(RepoLink(name, path, remote.strip()))
+        self.repos.append(RepoLink(name, path, remote.strip(), forge, host.strip()))
         return True
 
     def remove_repo(self, name: str) -> bool:
