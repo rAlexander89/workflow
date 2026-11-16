@@ -417,7 +417,13 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             verdict = _mb.assess(conn2, key, repo=_repo_path(c, None))
         finally:
             conn2.close()
-        verdict_html = ('<div class="item"><b class="ok">Merge bot: good to merge</b></div>' if verdict.ok else
+        from wf import github_status as _ghs
+        pr_row = board.connect(db_path).execute(
+            "select detail from ticket_event where ticket_key = ? and kind = 'pr' order by id desc limit 1", (key,)).fetchone()
+        if pr_row and _ghs.pr_status(pr_row[0]).get("merged"):
+            verdict_html = '<div class="item"><b class="ok">Merged to GitHub main</b></div>'
+        else:
+            verdict_html = ('<div class="item"><b class="ok">Merge bot: good to merge</b></div>' if verdict.ok else
                         '<div class="item"><b class="bad">Merge bot: not good to merge</b><ul>'
                         + "".join(f"<li>{_html.escape(r)}</li>" for r in verdict.reasons) + "</ul></div>")
         approved = ", ".join(approvals) if approvals else "none at this commit"
