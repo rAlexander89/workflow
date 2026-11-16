@@ -119,20 +119,32 @@ def brief(detail: dict) -> str:
     return "\n".join(lines)
 
 
-def system_prompt(role: str) -> str:
+def system_prompt(role: str, bot_email: str = "", credentials_path: str = "") -> str:
     path = PROMPTS_DIR / f"{role}.md"
     if not path.exists():
         raise FileNotFoundError(f"no prompt for role {role!r} at {path}")
-    return path.read_text()
+    text = path.read_text()
+    if not bot_email:
+        return text
+    return text.rstrip() + f"""
+
+## Your app account
+- You have your own login to the local app: {bot_email}.
+- The password is in the credentials file at {credentials_path}. You cannot open that file.
+- Call bot_login before you use the app, and bot_logout when you are done. bot_login reads the password for you and never shows it.
+- Never print, paste, log, or write a password anywhere, and never ask for one.
+"""
 
 
 def run_agent(
     conn: sqlite3.Connection, role: str, key: str, *, repo: Path, runs_dir: Path,
-    access: bool, model: str, test_cmd: str = "", app_cmd: str = "", claude_bin: str | None = None,
+    access: bool, model: str, test_cmd: str = "", app_cmd: str = "", app_url: str = "", claude_bin: str | None = None,
     runner: claude_run.Runner | None = None, timeout: float = 3600.0,
-    clock: Callable[[], float] = time.time,
+    clock: Callable[[], float] = time.time, bot_domain: str = "", bot_credentials: str = "",
 ) -> AgentResult:
     ensure_schema(conn)
+    bot_email = f"{role}@{bot_domain}" if bot_domain else ""
+    cred_path = bot_credentials if bot_domain else ""
     detail = board.ticket_detail(conn, key)
     if detail is None:
         raise board.BoardError(f"no ticket {key}")
@@ -141,11 +153,12 @@ def run_agent(
     run_dir = runs_dir / "runs" / key / f"{role}-{int(clock())}"
     env = {
         "WF_ROLE": role, "WF_KEY": key, "WF_DB": str(conn.execute("pragma database_list").fetchone()[2]),
-        "WF_WORKTREE": str(worktree), "WF_TEST_CMD": test_cmd, "WF_APP_CMD": app_cmd,
+        "WF_WORKTREE": str(worktree), "WF_TEST_CMD": test_cmd, "WF_APP_CMD": app_cmd, "WF_APP_URL": app_url,
     }
     gateway = [sys.executable, "-m", "wf.gateway_server"]
+    env.update({"WF_BOT_EMAIL": bot_email, "WF_BOT_CREDENTIALS": cred_path})
     result = claude_run.run(
-        worktree=worktree, prompt=brief(detail), system_prompt=system_prompt(role), model=model,
+        worktree=worktree, prompt=brief(detail), system_prompt=system_prompt(role, bot_email, cred_path), model=model,
         run_dir=run_dir, profile=role, gateway_command=gateway, access=access, gateway_env=env,
         timeout=timeout, claude_bin=claude_bin, runner=runner,
     )
@@ -165,7 +178,8 @@ def runs_at(conn: sqlite3.Connection, key: str, stage: str) -> int:
 
 def tick(
     conn: sqlite3.Connection, *, repo: Path, runs_dir: Path, access: bool, model: str,
-    test_cmd: str = "", app_cmd: str = "", dry_run: bool = True, runner: claude_run.Runner | None = None,
+    test_cmd: str = "", app_cmd: str = "", app_url: str = "", bot_domain: str = "", bot_credentials: str = "",
+    dry_run: bool = True, runner: claude_run.Runner | None = None,
     claude_bin: str | None = None, clock: Callable[[], float] = time.time,
 ) -> list[dict]:
     """One pass over the board: run the role for each ticket that needs one.
@@ -197,7 +211,8 @@ def tick(
                 board.move_stage(conn, row["key"], "in_dev", "dev", "dev pickup")
                 action["stage"] = "in_dev"
             res = run_agent(conn, role, row["key"], repo=repo, runs_dir=runs_dir, access=access,
-                            model=model, test_cmd=test_cmd, app_cmd=app_cmd, claude_bin=claude_bin, runner=runner, clock=clock)
+                            model=model, test_cmd=test_cmd, app_cmd=app_cmd, app_url=app_url, claude_bin=claude_bin, runner=runner, clock=clock,
+                            bot_domain=bot_domain, bot_credentials=bot_credentials)
             action["exit_code"] = res.run.exit_code if res.run else None
         actions.append(action)
     return actions

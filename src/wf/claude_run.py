@@ -61,6 +61,10 @@ PROFILES: dict[str, dict[str, list[str]]] = {
     },
 }
 
+# Every role may sign in to the local app as its own bot account and sign out again.
+for _spec in PROFILES.values():
+    _spec["allowed_tools"] += _tools("bot_login", "bot_logout")
+
 # (argv, cwd, timeout seconds) -> CompletedProcess. Injected so tests run offline.
 Runner = Callable[[list[str], Path, float], "subprocess.CompletedProcess[str]"]
 

@@ -501,7 +501,7 @@ def cmd_agents_tick(args) -> int:
     try:
         actions = agents.tick(
             conn, repo=_repo_path(c, args.repo), runs_dir=_runs_dir(c, args.runs), access=c.model.claude_code_access,
-            model=args.model or c.agents.model, test_cmd=args.test_cmd or c.agents.test_cmd, app_cmd=c.agents.app_cmd, dry_run=not args.apply,
+            model=args.model or c.agents.model, test_cmd=args.test_cmd or c.agents.test_cmd, app_cmd=c.agents.app_cmd, app_url=c.agents.app_url, bot_domain=c.bots.domain if c.bots.enabled else "", bot_credentials=c.bots.credentials_file, dry_run=not args.apply,
             claude_bin=shutil.which(claude_run.CLAUDE_BIN),
         )
     except (claude_run.ProviderNotAllowed, ValueError, board.BoardError) as e:
@@ -585,7 +585,7 @@ def cmd_env(args) -> int:
     from wf import envs
 
     c = cfgmod.load(_cfg_path(args))
-    state_dir = _runs_dir(c) / "envs"
+    state_dir = _runs_dir(c, None) / "envs"
     if args.env_cmd == "status":
         st = envs.status(state_dir, args.name or "app")
         print("not running" if not st or not st["running"] else f"running at {st['url']} (pid {st['pid']})")
@@ -595,7 +595,7 @@ def cmd_env(args) -> int:
         return 0
     repo = _repo_path(c, args.repo)
     try:
-        st = envs.up(args.name or "app", repo=repo, app_cmd=c.agents.app_cmd, state_dir=state_dir)
+        st = envs.up(args.name or "app", repo=repo, app_cmd=c.agents.app_cmd, state_dir=state_dir, app_url=c.agents.app_url)
     except (ValueError, RuntimeError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

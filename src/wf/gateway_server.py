@@ -56,6 +56,10 @@ TOOLS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}}}},
     {"name": "stop_app", "description": "Stop the app started by start_app.",
      "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "bot_login", "description": "Log in to the local app as this run's bot account. The password is read here and never returned.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "bot_logout", "description": "Log out of the local app.",
+     "inputSchema": {"type": "object", "properties": {}}},
     {"name": "open_pr", "description": "Not available to agents. Refused.",
      "inputSchema": {"type": "object", "properties": {}}},
 ]
@@ -70,6 +74,11 @@ class Scope:
         self.worktree = Path(env["WF_WORKTREE"]) if env.get("WF_WORKTREE") else None
         self.test_cmd = env.get("WF_TEST_CMD", "")
         self.app_cmd = env.get("WF_APP_CMD", "")  # the project's own command to start its app; "{port}" is replaced
+        self.app_url = env.get("WF_APP_URL", "")  # an app already running; used instead of starting one
+        self.bot_email = env.get("WF_BOT_EMAIL", "")  # this run's app account
+        self.bot_credentials = Path(env["WF_BOT_CREDENTIALS"]) if env.get("WF_BOT_CREDENTIALS") else None
+        self.bot_api = env.get("WF_BOT_API", "http://127.0.0.1:3001")  # the local app's JSON auth API
+        self.bot_host = env.get("WF_BOT_HOST", "localhost:3001")  # the app routes by Host header
         if not self.role or not self.key:
             raise ValueError("WF_ROLE and WF_KEY are required")
 
@@ -167,11 +176,18 @@ class Gateway:
     _app: subprocess.Popen | None = None
     _port: int | None = None
 
+    _external: str | None = None
+
     def start_app(self, _args: dict) -> dict:
         import socket
         import time
         import urllib.request
 
+        from wf import envs
+
+        if self.scope.app_url and envs.answers(self.scope.app_url):
+            self._external = self.scope.app_url.rstrip("/")
+            return {"url": self._external, "running": "already running"}
         if not self.scope.app_cmd or self.scope.worktree is None:
             raise ValueError("no app command is configured for this project")
         if self._app is not None and self._app.poll() is None:
@@ -200,10 +216,14 @@ class Gateway:
         import urllib.error
         import urllib.request
 
-        if self._app is None or self._app.poll() is not None or self._port is None:
+        if self._external is not None:
+            base = self._external
+        elif self._app is None or self._app.poll() is not None or self._port is None:
             raise ValueError("the app is not running; call start_app first")
+        else:
+            base = f"http://127.0.0.1:{self._port}"
         path = args["path"] if args["path"].startswith("/") else "/" + args["path"]
-        url = f"http://127.0.0.1:{self._port}{path}"
+        url = f"{base}{path}"
         try:
             with urllib.request.urlopen(url, timeout=10) as resp:
                 return {"status": resp.status, "body": resp.read(4000).decode(errors="replace")}
@@ -211,6 +231,7 @@ class Gateway:
             return {"status": e.code, "body": e.read(4000).decode(errors="replace")}
 
     def stop_app(self, _args: dict) -> dict:
+        self._external = None  # an app we only borrowed is never stopped
         if self._app is not None and self._app.poll() is None:
             self._app.terminate()
             try:
@@ -219,6 +240,52 @@ class Gateway:
                 self._app.kill()
         self._app = None
         return {"stopped": True}
+
+    _bot_jar = None
+
+    def _bot_password(self) -> str:
+        path = self.scope.bot_credentials
+        if path is None or not path.exists():
+            raise ValueError("no credentials file is configured for this run")
+        want = f"{self.scope.role}_password"
+        for line in path.read_text().splitlines():
+            if "=" in line and line.split("=", 1)[0].strip().lower() == want:
+                return line.split("=", 1)[1]
+        raise ValueError(f"no password for the {self.scope.role} bot in the credentials file")
+
+    def _bot_request(self, method: str, path: str, body: dict | None = None) -> tuple[int, str]:
+        import http.cookiejar
+        import urllib.error
+        import urllib.request
+
+        if self._bot_jar is None:
+            self._bot_jar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self._bot_jar))
+        data = json.dumps(body).encode() if body is not None else None
+        headers = {"Content-Type": "application/json", "Host": self.scope.bot_host}
+        req = urllib.request.Request(self.scope.bot_api.rstrip("/") + path, data=data, method=method, headers=headers)
+        try:
+            with opener.open(req, timeout=20) as resp:
+                return resp.status, resp.read().decode(errors="replace")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode(errors="replace")
+
+    def bot_login(self, _args: dict) -> dict:
+        if not self.scope.bot_email:
+            raise ValueError("this run has no bot account")
+        password = self._bot_password()
+        status, _ = self._bot_request("POST", "/api/auth/login", {"email": self.scope.bot_email, "password": password})
+        if status != 200:
+            raise PermissionError(f"login failed for {self.scope.bot_email} (HTTP {status})")
+        me_status, me = self._bot_request("GET", "/api/auth/me")
+        if me_status != 200 or self.scope.bot_email not in me:
+            raise PermissionError("logged in, but the session does not belong to this bot")
+        return {"logged_in": True, "email": self.scope.bot_email}
+
+    def bot_logout(self, _args: dict) -> dict:
+        status, _ = self._bot_request("POST", "/api/auth/logout", {})
+        self._bot_jar = None
+        return {"logged_out": status in (200, 204)}
 
     def open_pr(self, _args: dict) -> dict:
         raise PermissionError("agents may not open pull requests; the GitHub agent does this "

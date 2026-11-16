@@ -56,6 +56,7 @@ class AgentsConfig:
     test_cmd: str = "make test"  # runs in each ticket's worktree; a merge needs it to pass
     model: str = "claude-sonnet-5-5"  # Claude model for agent runs
     app_cmd: str = ""  # starts the project's app; "{port}" is the port the agent gets (empty = no app)
+    app_url: str = ""  # a local app already running (e.g. http://127.0.0.1:3002); used instead of starting one
 
 
 @dataclass

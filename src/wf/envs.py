@@ -14,6 +14,7 @@ import signal
 import socket
 import subprocess
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -41,13 +42,35 @@ def status(state_dir: Path, name: str) -> dict | None:
     if not f.exists():
         return None
     st = json.loads(f.read_text())
-    st["running"] = _alive(st["pid"])
+    if st.get("external"):
+        st["running"] = answers(st["url"])
+    else:
+        st["running"] = _alive(st["pid"])
     return st
 
 
-def up(name: str, *, repo: Path, app_cmd: str, state_dir: Path, timeout: float = 60.0) -> dict:
+def answers(url: str, timeout: float = 3.0) -> bool:
+    try:
+        urllib.request.urlopen(url.rstrip("/") + "/", timeout=timeout).close()
+        return True
+    except urllib.error.HTTPError:
+        return True  # it answered, even if the page is an error
+    except Exception:
+        return False
+
+
+def up(name: str, *, repo: Path, app_cmd: str, state_dir: Path, timeout: float = 60.0,
+       app_url: str = "") -> dict:
+    """Use the app already running at app_url if it answers; otherwise start app_cmd."""
+    if app_url and answers(app_url):
+        st = {"name": name, "external": True, "pid": None, "port": None, "url": app_url.rstrip("/"),
+              "repo": str(repo), "started_at": int(time.time())}
+        state_dir.mkdir(parents=True, exist_ok=True)
+        _state_file(state_dir, name).write_text(json.dumps(st, indent=2) + "\n")
+        st["running"] = True
+        return st
     if not app_cmd:
-        raise ValueError("no app command is configured (agents.app_cmd)")
+        raise ValueError("no app is running at agents.app_url and no app command is set (agents.app_cmd)")
     current = status(state_dir, name)
     if current and current["running"]:
         return current
@@ -78,6 +101,10 @@ def down(name: str, *, state_dir: Path, timeout: float = 10.0) -> bool:
     st = status(state_dir, name)
     if st is None:
         return False
+    if st.get("external"):
+        # Not ours to stop: forget the link, leave the running app alone.
+        _state_file(state_dir, name).unlink(missing_ok=True)
+        return True
     if st["running"]:
         try:
             os.killpg(st["pid"], signal.SIGTERM)
