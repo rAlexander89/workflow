@@ -208,6 +208,8 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                 try:
                     for key in github_agent.publish_ready(conn, repo=_repo_path(c, None)):
                         _log(f"{key}: GitHub PR opened")
+                    for key in github_agent.merge_when_clear(conn, repo=_repo_path(c, None)):
+                        _log(f"{key}: GitHub PR merged (QA passed, checks green, nothing flagged)")
                 finally:
                     conn.close()
                 if ready_work(c):

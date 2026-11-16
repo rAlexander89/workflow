@@ -76,3 +76,64 @@ def publish_ready(conn: sqlite3.Connection, *, repo: Path, runner=None) -> list[
         except PublishBlocked:
             continue
     return opened
+
+
+def _branch_only_adds_this_ticket(repo: Path, key: str, runner) -> tuple[bool, str]:
+    """Every commit the PR would add to GitHub's main must carry the ticket key."""
+    branch = agents.branch_for(key)
+    fetched = runner(["git", "fetch", "-q", "origin", "main"], repo)
+    if fetched.returncode != 0:
+        return False, f"could not fetch origin/main: {fetched.stderr.strip()[-200:]}"
+    subjects = runner(["git", "log", "--format=%s", f"origin/main..{branch}"], repo)
+    if subjects.returncode != 0:
+        return False, "could not read the branch's commits"
+    lines = [l for l in subjects.stdout.splitlines() if l.strip()]
+    stray = [l for l in lines if key not in l]
+    if stray:
+        return False, f"the branch would also add commits that are not {key}: {stray[0][:80]}"
+    return True, ""
+
+
+def merge_when_clear(conn: sqlite3.Connection, *, repo: Path, runner=None, status=None) -> list[str]:
+    """Merge a ticket's GitHub PR once QA has passed it and nothing is flagged.
+
+    Needs: PR reviewer and QA approved the current commit, no flags, GitHub checks passed, and
+    a branch that adds only this ticket's commits to GitHub's main. Returns the keys merged.
+    """
+    from wf import board as _board
+    from wf import github_status
+
+    run = runner or (lambda a, cwd: subprocess.run(a, cwd=cwd, capture_output=True, text=True, check=False))
+    get = status or github_status.pr_status
+    merged = []
+    rows = conn.execute(
+        "select key, flags from ticket where stage in ('qa_approved', 'merged') and removed_at is null").fetchall()
+    for row in rows:
+        key = row["key"]
+        if row["flags"] not in (None, "[]"):
+            continue
+        pr = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'pr' "
+                          "order by id desc limit 1", (key,)).fetchone()
+        if pr is None:
+            continue
+        url = pr[0]
+        st = get(url)
+        if not st.get("ok") or st.get("merged") or st.get("state") != "OPEN" or st.get("checks") != "passed":
+            continue
+        head = run(["git", "rev-parse", "--verify", "--quiet", agents.branch_for(key)], repo)
+        if head.returncode != 0:
+            continue
+        approvals = _board.approvals_at(conn, key, head.stdout.strip())
+        if not {"pr_review", "qa"} <= approvals:
+            continue
+        clean, _why = _branch_only_adds_this_ticket(repo, key, run)
+        if not clean:
+            continue
+        proc = run(["gh", "pr", "merge", url, "--merge"], repo)
+        if proc.returncode != 0:
+            continue
+        with conn:
+            conn.execute("insert into ticket_event (ticket_key, at, actor, kind, from_value, to_value, detail) "
+                         "values (?, strftime('%s','now'), 'harness', 'pr_merged', null, null, ?)", (key, url))
+        merged.append(key)
+    return merged
