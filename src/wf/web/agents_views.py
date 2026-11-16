@@ -15,7 +15,7 @@ import traceback
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from wf import agents, board
@@ -138,6 +138,8 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         def work():
             conn = board.connect(db_path)
             try:
+                for key in agents.advance_reviewed(conn, repo=_repo_path(c, None), worktrees=_runs_dir(c) / "worktrees"):
+                    _log(f"{key}: review approved; moved to QA")
                 actions = agents.tick(
                     conn, repo=_repo_path(c, None), runs_dir=_runs_dir(c), access=access,
                     model=c.agents.model, test_cmd=c.agents.test_cmd, app_cmd=c.agents.app_cmd,
@@ -147,6 +149,15 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                 for a in actions:
                     _log(f"{a['key']}: {a['role']} on {a['stage']}"
                          + (f" -> {a['skipped']}" if a.get("skipped") else f" (exit {a.get('exit_code')})"))
+                # Merge is automatic once both approvals and passing tests are in place.
+                for key in [r["key"] for r in conn.execute(
+                        "select key from ticket where stage = 'qa_approved' and removed_at is null").fetchall()]:
+                    try:
+                        head = merge.merge(conn, key, repo=_repo_path(c, None), runs_dir=_runs_dir(c),
+                                           test_cmd=c.agents.test_cmd)
+                        _log(f"{key} merged into main at {head[:8]}")
+                    except merge.MergeBlocked as e:
+                        _log(f"{key} not merged yet: {e}")
                 if not actions:
                     _log("nothing to run: no ticket is waiting for an agent")
             finally:
@@ -311,6 +322,56 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         if not _start("send to Jira", work):
             _log("another action is already running")
         return RedirectResponse("/agents", status_code=303)
+
+    @app.get("/board/ticket/{key}/pr-card", response_class=HTMLResponse)
+    def pr_card(request: Request, key: str):
+        """The internal pull request for a ticket: its branch, head commit, approvals, and diff."""
+        import html as _html
+        import subprocess
+
+        c = settings()
+        conn = board.connect(db_path)
+        try:
+            row = conn.execute("select stage from ticket where key = ?", (key,)).fetchone()
+            if row is None:
+                return HTMLResponse("", status_code=404)
+            branch = agents.branch_for(key)
+            try:
+                repo = _repo_path(c, None)
+            except board.BoardError:
+                return HTMLResponse('<div class="muted">No repo linked.</div>')
+            head_proc = subprocess.run(["git", "rev-parse", "--verify", "--quiet", branch], cwd=repo,
+                                       capture_output=True, text=True)
+            if head_proc.returncode != 0:
+                return HTMLResponse('<div class="muted">No branch yet. The dev run creates it.</div>')
+            head = head_proc.stdout.strip()
+            stat = subprocess.run(["git", "diff", "--stat", f"main...{branch}"], cwd=repo,
+                                  capture_output=True, text=True).stdout.strip().splitlines()
+            approvals = sorted(board.approvals_at(conn, key, head))
+            tests = conn.execute(
+                "select exit_code from agent_run where key = ? and role = 'dev' order by id desc limit 1",
+                (key,)).fetchone()
+        finally:
+            conn.close()
+        summary = _html.escape(stat[-1]) if stat else "no changes against main"
+        approved = ", ".join(approvals) if approvals else "none at this commit"
+        body = f"""<div class="panel"><div class="row between"><b>{_html.escape(branch)}</b>
+<span class="muted">{head[:10]}</span></div>
+<div class="item">Changes: {summary}</div>
+<div class="item">Approved at this commit: {_html.escape(approved)}</div>
+<div class="item">Last dev run: {"ok" if tests and tests[0] == 0 else "not ok" if tests else "none"}</div>
+<div class="item"><a href="/board/ticket/{_html.escape(key)}/diff" target="_blank">View the diff against main</a></div></div>"""
+        return HTMLResponse(body)
+
+    @app.get("/board/ticket/{key}/diff", response_class=PlainTextResponse)
+    def diff(key: str):
+        import subprocess
+
+        c = settings()
+        branch = agents.branch_for(key)
+        repo = _repo_path(c, None)
+        proc = subprocess.run(["git", "diff", f"main...{branch}"], cwd=repo, capture_output=True, text=True)
+        return PlainTextResponse(proc.stdout or proc.stderr or "no diff")
 
     @app.get("/agents/state", response_class=HTMLResponse)
     def state_partial(request: Request):

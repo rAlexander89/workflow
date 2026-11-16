@@ -12,7 +12,6 @@
   </div>
   <div class="row">
     <form method="post" action="/agents/jira/sync"><button {% if state.running %}disabled{% endif %}>Sync from Jira</button></form>
-    <form method="post" action="/agents/tick"><button class="primary" {% if state.running %}disabled{% endif %}>Run next step for all</button></form>
   </div>
 </div>
 
@@ -52,8 +51,6 @@
         <form method="post" action="/board/ticket/{{ t.key }}/flag/clear">
           <input type="hidden" name="flag" value="{{ t.flag_list[0] }}"><button>Clear flag</button>
         </form>
-        {% elif t.role %}
-        <form method="post" action="/agents/run/{{ t.key }}"><button class="primary" {% if state.running %}disabled{% endif %}>Run {{ t.role }}</button></form>
         {% endif %}
         {% if t.can_merge %}
         <form method="post" action="/agents/merge/{{ t.key }}"><button class="primary" {% if state.running %}disabled{% endif %}>Merge to main</button></form>

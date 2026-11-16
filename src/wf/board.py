@@ -563,6 +563,10 @@ ALLOWED_MOVES: frozenset[tuple[str, str, str]] = frozenset({
     ("qa", "ready_for_qa", "in_dev"),
     ("qa", "regression", "in_dev"),
     ("harness", "pr_in_review", "ready_for_qa"),
+    ("pr_review", "pr_open", "ready_for_qa"),
+    ("harness", "pr_open", "ready_for_qa"),
+    ("harness", "pr_in_review", "ready_for_qa"),
+    ("pr_review", "pr_in_review", "ready_for_qa"),
     ("qa", "regression", "deployed"),
     ("harness", "qa_approved", "merged"),
 })
@@ -584,12 +588,8 @@ def move_stage(conn: sqlite3.Connection, key: str, stage: str, actor: str, reaso
         raise BoardError(f"no ticket {key}")
     if row["removed_at"] is not None:
         raise BoardError(f"{key} is no longer in scope; it cannot be moved")
-    blocked = conn.execute(
-        "select 1 from stage_mapping where project_key = ? and stage = ? and status_name is null",
-        (row["project_key"], stage),
-    ).fetchone()
-    if blocked:
-        raise BoardError(f"stage {stage!r} is unmapped for {row['project_key']}; it cannot be entered")
+    # A stage with no Jira column is internal-only: the move is recorded on the board, and
+    # enqueue_transition queues nothing for Jira. Nothing outside the board changes.
     if row["stage"] == stage:
         return
     if not may_move(actor, row["stage"], stage):

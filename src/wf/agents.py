@@ -172,8 +172,44 @@ def run_agent(
 
 
 def runs_at(conn: sqlite3.Connection, key: str, stage: str) -> int:
+    """How many runs in a row have failed here (non-zero exit or timed out), most recent first.
+
+    A run that succeeds resets the count, so work keeps going while the agent is making
+    progress. Only repeated failures count toward the stop: that is a real obstacle.
+    """
     ensure_schema(conn)
-    return conn.execute("select count(*) from agent_run where key = ? and stage = ?", (key, stage)).fetchone()[0]
+    rows = conn.execute(
+        "select exit_code, timed_out from agent_run where key = ? and stage = ? order by id desc",
+        (key, stage)).fetchall()
+    streak = 0
+    for r in rows:
+        if r["timed_out"] or r["exit_code"] != 0:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def advance_reviewed(conn: sqlite3.Connection, *, repo: Path, worktrees: Path) -> list[str]:
+    """Move each ticket whose PR review approval covers the branch's current commit to ready_for_qa.
+
+    An approval at the head is the review. Once it's on file, the next step is QA, so the
+    harness does the move; no agent has to re-review a commit it has already approved.
+    """
+    ensure_schema(conn)
+    moved = []
+    rows = conn.execute("select key from ticket where stage in ('pr_open', 'pr_in_review') and removed_at is null").fetchall()
+    for row in rows:
+        key = row["key"]
+        proc = subprocess.run(["git", "rev-parse", "--verify", "--quiet", branch_for(key)], cwd=repo,
+                              capture_output=True, text=True)
+        if proc.returncode != 0:
+            continue
+        head = proc.stdout.strip()
+        if "pr_review" in board.approvals_at(conn, key, head):
+            board.move_stage(conn, key, "ready_for_qa", "harness", f"review approved at {head[:8]}")
+            moved.append(key)
+    return moved
 
 
 def tick(

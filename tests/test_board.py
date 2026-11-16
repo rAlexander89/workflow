@@ -331,11 +331,11 @@ def test_move_stage_to_a_mapped_stage_is_logged(conn):
         "stage", "dev", "ready_for_dev", "pr_open")
 
 
-def test_move_to_a_blocked_stage_is_refused(conn):
+def test_move_to_an_internal_only_stage_is_recorded_and_queues_nothing_for_jira(conn):
     sync(conn, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
-    with pytest.raises(board.BoardError, match="unmapped"):
-        board.move_stage(conn, "ABC-1", "regression", actor="qa", reason="x", clock=clock)
-    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_dev"
+    board.move_stage(conn, "ABC-1", "regression", actor="user", reason="x", clock=clock)
+    assert ticket_row(conn, "ABC-1")["stage"] == "regression"
+    assert conn.execute("select count(*) from outbox where ticket_key='ABC-1'").fetchone()[0] == 0
 
 
 def test_move_rejects_unknown_stage_removed_ticket_and_missing_ticket(conn):

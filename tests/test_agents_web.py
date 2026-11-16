@@ -45,4 +45,4 @@ def test_state_partial_renders(client):
 def test_ticket_timeline_shows_stages_and_next_role(client):
     r = client.get("/board/ticket/ABC-1")
     assert r.status_code == 200
-    assert "Ready for dev" in r.text and "Run dev" in r.text
+    assert "Ready for dev" in r.text and "Run dev" not in r.text  # runs are automatic

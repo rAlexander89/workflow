@@ -219,3 +219,58 @@ def test_dev_can_search_the_repo(conn, repo, tmp_path):
     argv = calls[0]["argv"]
     builtin = argv[argv.index("--tools") + 1:argv.index("--allowedTools")]
     assert {"Glob", "Grep", "Read", "Edit", "Write"} <= set(builtin)
+
+
+def _run(conn, exit_code, timed_out=0, stage="ready_for_dev"):
+    conn.execute("insert into agent_run (key, stage, role, started_at, exit_code, timed_out, output_path) "
+                 "values ('ABC-1', ?, 'dev', 0, ?, ?, 'x')", (stage, exit_code, timed_out))
+
+
+def test_repeated_failures_are_a_real_obstacle(conn):
+    for _ in range(agents.MAX_RUNS_PER_STAGE):
+        _run(conn, 1)
+    assert agents.runs_at(conn, "ABC-1", "ready_for_dev") >= agents.MAX_RUNS_PER_STAGE
+
+
+def test_successful_runs_keep_going_however_many(conn):
+    for _ in range(10):
+        _run(conn, 0)
+    assert agents.runs_at(conn, "ABC-1", "ready_for_dev") == 0
+
+
+def test_a_success_resets_the_failure_streak(conn):
+    _run(conn, 1); _run(conn, 1); _run(conn, 0)
+    assert agents.runs_at(conn, "ABC-1", "ready_for_dev") == 0
+
+
+def test_pr_review_approval_moves_the_ticket_to_qa(conn, repo, tmp_path):
+    wt = _branch_with_change(repo, tmp_path)
+    conn.execute("update ticket set stage = 'pr_open' where key = 'ABC-1'")
+    conn.commit()
+    from wf import gateway_server
+    g = gateway_server.Gateway(gateway_server.Scope({
+        "WF_ROLE": "pr_review", "WF_KEY": "ABC-1", "WF_DB": str(conn.execute("pragma database_list").fetchone()[2]),
+        "WF_WORKTREE": str(wt)}))
+    g.approve_ticket({})
+    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_qa"
+    assert "pr_review" in board.approvals_at(conn, "ABC-1", agents.head_of(wt))
+
+
+def test_an_approval_at_head_moves_the_ticket_to_qa_without_another_review(conn, repo, tmp_path):
+    wt = _branch_with_change(repo, tmp_path)
+    conn.execute("update ticket set stage = 'pr_open' where key = 'ABC-1'")
+    conn.commit()
+    board.record_approval(conn, "ABC-1", "pr_review", agents.head_of(wt), clock=clock)
+    moved = agents.advance_reviewed(conn, repo=repo, worktrees=tmp_path / "runs" / "worktrees")
+    assert moved == ["ABC-1"]
+    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_qa"
+
+
+def test_an_old_approval_does_not_move_a_ticket_after_new_commits(conn, repo, tmp_path):
+    wt = _branch_with_change(repo, tmp_path)
+    conn.execute("update ticket set stage = 'pr_open' where key = 'ABC-1'")
+    conn.commit()
+    board.record_approval(conn, "ABC-1", "pr_review", agents.head_of(wt), clock=clock)
+    (wt / "app.txt").write_text("v9\n")
+    git(["commit", "-qam", "more"], wt)
+    assert agents.advance_reviewed(conn, repo=repo, worktrees=tmp_path / "runs" / "worktrees") == []
