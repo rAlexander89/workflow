@@ -117,6 +117,10 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             t["flag_list"] = json.loads(t["flags"] or "[]")
             t["label_list"] = json.loads(t["labels"] or "[]")
             next_role = None if t["flag_list"] else _agents.STAGE_ROLE.get(t["stage"] or "")
+            pr_url = (c.execute("select detail from ticket_event where ticket_key=? and kind='pr' "
+                                "order by id desc limit 1", (key,)).fetchone() or [None])[0]
+            from wf import github_status as _gh
+            gh = _gh.pr_status(pr_url) if pr_url else {}
             flag_reason = next((e["detail"] for e in events if e["kind"] == "flag"), "") if t["flag_list"] else ""
             return page(request, "ticket.html", "agents", ticket=t, comments=detail["comments"],
                         events=events, noise_count=len(noise), flag_reason=flag_reason, outbox_items=items, runs=runs, next_role=next_role,
@@ -125,9 +129,8 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
                             t["stage"],
                             last_run_failed=bool(runs and (runs[0]["exit_code"] != 0 or runs[0]["timed_out"])),
                             perf_requested=board.perf_requested(c, key),
-                            pr_url=(c.execute("select detail from ticket_event where ticket_key=? and kind='pr' "
-                                              "order by id desc limit 1", (key,)).fetchone() or [None])[0],
-                            pr_merged=False))
+                            pr_url=pr_url, pr_merged=gh.get("merged", False),
+                            pr_checks=gh.get("checks", "none"), pr_closed=gh.get("ok") and gh.get("state") == "CLOSED"))
         finally:
             c.close()
 

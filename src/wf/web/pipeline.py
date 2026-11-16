@@ -61,7 +61,7 @@ _ORDER = [stage for _, _, stage in FLOW if stage]
 
 
 def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: bool,
-                pr_url: str | None, pr_merged: bool) -> list[dict]:
+                pr_url: str | None, pr_merged: bool, pr_checks: str = "none", pr_closed: bool = False) -> list[dict]:
     """Each step with its state: done (green), current (yellow), failed (red), skipped, or todo.
 
     A step is failed only where the ticket is now and its last agent run failed. Performance is
@@ -76,9 +76,14 @@ def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: boo
                                                              or stage in ("ready_for_prod", "deployed")):
             state = "skipped"
         elif key == "github":
-            state = "todo" if not pr_url else ("done" if pr_merged else "current")
-            if pr_url and not pr_merged and stage not in ("ready_for_prod", "deployed"):
+            if not pr_url:
                 state = "todo"
+            elif pr_merged:
+                state = "done"
+            elif pr_closed or pr_checks == "failed":
+                state = "failed"
+            else:
+                state = "current"
         elif key == "dev":
             state = "done" if pr_merged else "todo"
         elif at is not None and stage == at:
