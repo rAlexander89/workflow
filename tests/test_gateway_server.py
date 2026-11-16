@@ -130,3 +130,17 @@ def test_agent_can_start_fetch_and_stop_the_app(db, tmp_path):
 def test_start_app_needs_a_configured_command(db, tmp_path):
     res = call(app_gw(db, tmp_path, ""), "start_app")
     assert res["isError"] is True
+
+
+def test_pr_review_will_not_approve_a_branch_with_stray_commits(db, tmp_path):
+    import subprocess as sp
+    from tests.test_agents import git, GIT_ENV
+    repo = tmp_path / "r"; repo.mkdir()
+    git(["init", "-q", "-b", "main"], repo)
+    (repo / "a.txt").write_text("1"); git(["add", "-A"], repo); git(["commit", "-q", "-m", "base"], repo)
+    git(["checkout", "-q", "-b", "agent/ABC-1"], repo)
+    (repo / "a.txt").write_text("2"); git(["commit", "-qam", "unrelated listing change"], repo)
+    git(["update-ref", "refs/remotes/origin/main", "main"], repo)
+    g = gw(db, role="pr_review", worktree=repo)
+    res = call(g, "approve_ticket")
+    assert res["isError"] is True and "not approving" in res["content"][0]["text"]

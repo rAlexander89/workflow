@@ -111,7 +111,7 @@ def _branch_with_change(repo, tmp_path):
     wt = agents.ensure_worktree(repo, "ABC-1", tmp_path / "runs" / "worktrees")
     (wt / "app.txt").write_text("v2\n")
     git(["add", "-A"], wt)
-    git(["commit", "-q", "-m", "change"], wt)
+    git(["commit", "-q", "-m", "ABC-1: change"], wt)
     return wt
 
 
@@ -206,6 +206,7 @@ def test_diff_range_uses_the_merge_commit_once_merged(conn, repo, tmp_path):
 
 def test_pr_review_approval_moves_the_ticket_to_qa(conn, repo, tmp_path):
     wt = _branch_with_change(repo, tmp_path)
+    git(["update-ref", "refs/remotes/origin/main", "main"], repo)  # GitHub's main, as last fetched
     conn.execute("update ticket set stage = 'pr_open' where key = 'ABC-1'")
     conn.commit()
     from wf import gateway_server

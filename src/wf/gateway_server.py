@@ -165,6 +165,13 @@ class Gateway:
 
     def approve_ticket(self, _args: dict) -> dict:
         head = self._head()
+        if self.scope.role == "pr_review" and self.scope.worktree is not None:
+            from wf import merge_bot
+            ok, stray = merge_bot.stray_commits(self.scope.key, self.scope.worktree)
+            if not ok:
+                raise PermissionError(
+                    f"not approving: the branch would also add commits that are not {self.scope.key}, "
+                    f"starting with {stray[0][:70]!r}. Use request_changes and say which commits to remove.")
         conn = board.connect(self.scope.db)
         try:
             board.record_approval(conn, self.scope.key, self.scope.role, head)

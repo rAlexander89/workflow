@@ -33,6 +33,19 @@ def _run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=False)
 
 
+def stray_commits(key: str, repo: Path, runner: Runner | None = None) -> tuple[bool, list[str]]:
+    """(ok, stray): ok when every commit the branch adds to GitHub's main carries the ticket key."""
+    run = runner or _run
+    fetched = run(["git", "fetch", "-q", "origin", "main"], repo)
+    if fetched.returncode != 0 and run(["git", "rev-parse", "--verify", "--quiet", "origin/main"], repo).returncode != 0:
+        return False, ["could not compare with GitHub's main: no origin/main to compare against"]
+    log = run(["git", "log", "--format=%s", f"origin/main..{agents.branch_for(key)}"], repo)
+    if log.returncode != 0:
+        return False, ["could not read the branch's commits"]
+    stray = [l for l in log.stdout.splitlines() if l.strip() and key not in l]
+    return (not stray), stray
+
+
 def assess(conn: sqlite3.Connection, key: str, *, repo: Path, runner: Runner | None = None,
            status: Callable[[str], dict] | None = None) -> Verdict:
     run = runner or _run
@@ -75,14 +88,11 @@ def assess(conn: sqlite3.Connection, key: str, *, repo: Path, runner: Runner | N
         if missing:
             reasons.append(f"not approved on the current commit by: {', '.join(sorted(missing))}")
 
-        fetched = run(["git", "fetch", "-q", "origin", "main"], repo)
-        if fetched.returncode != 0:
-            reasons.append("could not fetch GitHub's main to compare")
-        else:
-            log = run(["git", "log", "--format=%s", f"origin/main..{agents.branch_for(key)}"], repo)
-            stray = [l for l in log.stdout.splitlines() if l.strip() and key not in l]
-            if stray:
-                reasons.append(f"the PR would also add {len(stray)} commit(s) that are not {key}, "
-                               f"starting with: {stray[0][:70]}")
+        ok, stray = stray_commits(key, repo, run)
+        if not ok and stray and stray[0].startswith("could not"):
+            reasons.append(stray[0])
+        elif not ok:
+            reasons.append(f"the PR would also add {len(stray)} commit(s) that are not {key}, "
+                           f"starting with: {stray[0][:70]}")
 
     return Verdict(not reasons, reasons)
