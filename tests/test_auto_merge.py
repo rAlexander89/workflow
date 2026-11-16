@@ -29,6 +29,7 @@ def setup(tmp_path, stage="qa_approved"):
     c.execute("insert into ticket_event (ticket_key, at, actor, kind, from_value, to_value, detail) "
               "values (?, 1, 'harness', 'pr', null, null, 'https://github.com/o/r/pull/9')", (ISSUE,))
     board.record_approval(c, ISSUE, "pr_review", "abc123", clock=clock)
+    board.record_approval(c, ISSUE, "perf_review", "abc123", clock=clock)
     board.record_approval(c, ISSUE, "qa", "abc123", clock=clock)
     c.commit()
     return c
@@ -69,3 +70,10 @@ def test_a_branch_that_adds_other_commits_is_never_merged(tmp_path):
     git = Git(subjects="FKST-29: fix\nSend each listing once")
     assert github_agent.merge_when_clear(c, repo=tmp_path, runner=git, status=green()) == []
     assert not any(call[:3] == ["gh", "pr", "merge"] for call in git.calls)
+
+
+def test_a_missing_code_performance_review_stops_the_merge(tmp_path):
+    c = setup(tmp_path)
+    c.execute("delete from ticket_event where ticket_key = ? and kind = 'approve' and actor = 'perf_review'", (ISSUE,))
+    c.commit()
+    assert github_agent.merge_when_clear(c, repo=tmp_path, runner=Git(), status=green()) == []

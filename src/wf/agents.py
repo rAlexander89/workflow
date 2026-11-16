@@ -35,6 +35,7 @@ STAGE_ROLE: dict[str, str] = {
     "in_dev": "dev",
     "pr_open": "pr_review",
     "pr_in_review": "pr_review",
+    "ready_for_perf_review": "perf_review",
     "ready_for_qa": "qa",
     "merged": None,  # the harness moves it on to regression
     "regression": "qa",
@@ -265,7 +266,7 @@ def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, dev_deployed=None)
             continue
         head = proc.stdout.strip()
         if stage in ("pr_open", "pr_in_review") and "pr_review" in board.approvals_at(conn, key, head):
-            board.move_stage(conn, key, "ready_for_qa", "harness", f"review approved at {head[:8]}")
+            board.move_stage(conn, key, "ready_for_perf_review", "harness", f"PR review approved at {head[:8]}")
             moved.append(key)
     return moved
 

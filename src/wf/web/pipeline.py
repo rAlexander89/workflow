@@ -14,6 +14,7 @@ STAGE_INFO: dict[str, tuple[str, str]] = {
     "pr_open": ("PR open", "PR review"),
     "pr_in_review": ("PR in review", "PR review"),
     "ready_for_qa": ("Ready for QA", "QA"),
+    "ready_for_perf_review": ("Performance review", "Performance review"),
     "qa_approved": ("QA approved", "Merge gate"),
     "merged": ("Merged to main", "Harness"),
     "regression": ("Regression", "QA"),
@@ -47,6 +48,7 @@ def progress(current: str | None) -> list[dict]:
 FLOW = [
     ("dev_work", "Dev", "in_dev"),
     ("pr_review", "Internal PR review", "pr_open"),
+    ("perf_code", "Performance review (code)", "ready_for_perf_review"),
     ("qa", "QA", "ready_for_qa"),
     ("github", "GitHub PR", None),
     ("main", "In main (GitHub)", None),
@@ -91,10 +93,15 @@ def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: boo
         elif key == "dev_work":
             if stage == "in_dev":
                 state = "failed" if (flagged or last_run_failed) else "current"
-            elif stage in ("pr_open", "pr_in_review", "ready_for_qa", "qa_approved", "merged", "regression",
+            elif stage in ("pr_open", "pr_in_review", "ready_for_perf_review", "ready_for_qa", "qa_approved", "merged", "regression",
                            "performance", "deployed"):
                 state = "done"
-        elif key == "pr_review" and stage in ("ready_for_qa", "qa_approved", "merged", "regression", "performance", "deployed"):
+        elif key == "perf_code":
+            if stage == "ready_for_perf_review":
+                state = "failed" if (last_run_failed or flagged) else "current"
+            elif stage in ("ready_for_qa", "qa_approved", "merged", "regression", "performance", "deployed"):
+                state = "done"
+        elif key == "pr_review" and stage in ("ready_for_perf_review", "ready_for_qa", "qa_approved", "merged", "regression", "performance", "deployed"):
             state = "done"
         elif key == "qa":
             if stage == "ready_for_qa":

@@ -84,7 +84,7 @@ def assess(conn: sqlite3.Connection, key: str, *, repo: Path, runner: Runner | N
         reasons.append("the ticket's branch is missing")
     else:
         approvals = board.approvals_at(conn, key, head_proc.stdout.strip())
-        missing = {"pr_review", "qa"} - approvals
+        missing = {"pr_review", "perf_review", "qa"} - approvals
         if missing:
             reasons.append(f"not approved on the current commit by: {', '.join(sorted(missing))}")
 

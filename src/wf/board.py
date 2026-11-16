@@ -563,10 +563,13 @@ ALLOWED_MOVES: frozenset[tuple[str, str, str]] = frozenset({
     ("qa", "ready_for_qa", "in_dev"),
     ("qa", "regression", "in_dev"),
     ("harness", "pr_in_review", "ready_for_qa"),
-    ("pr_review", "pr_open", "ready_for_qa"),
-    ("harness", "pr_open", "ready_for_qa"),
-    ("harness", "pr_in_review", "ready_for_qa"),
-    ("pr_review", "pr_in_review", "ready_for_qa"),
+    ("pr_review", "pr_open", "ready_for_perf_review"),
+    ("pr_review", "pr_in_review", "ready_for_perf_review"),
+    ("harness", "pr_open", "ready_for_perf_review"),
+    ("harness", "pr_in_review", "ready_for_perf_review"),
+    ("harness", "ready_for_perf_review", "ready_for_qa"),
+    ("perf_review", "ready_for_perf_review", "ready_for_qa"),
+    ("perf_review", "ready_for_perf_review", "in_dev"),
     ("qa", "regression", "deployed"),
     ("harness", "merged", "regression"),
     ("qa", "regression", "performance"),
@@ -698,7 +701,7 @@ def add_comment(conn: sqlite3.Connection, key: str, author: str, body: str,
 def record_approval(conn: sqlite3.Connection, key: str, role: str, head: str,
                     clock: Callable[[], float] = time.time) -> None:
     """A reviewer approves the ticket at a specific commit. The merge gate reads these."""
-    if role not in ("pr_review", "qa", "performance"):
+    if role not in ("pr_review", "perf_review", "qa", "performance"):
         raise BoardError(f"{role!r} cannot approve a ticket")
     if not head:
         raise BoardError("an approval needs the commit it covers")

@@ -36,6 +36,11 @@ PROFILES: dict[str, dict[str, list[str]]] = {
             "get_ticket", "move_ticket", "flag_ticket", "run_tests", "commit", "post_comment",
             "start_app", "fetch_local", "stop_app", "request_perf_check"),
     },
+    "perf_review": {
+        "builtin_tools": ["Read", "Glob", "Grep"],
+        "allowed_tools": ["Read", "Glob", "Grep"] + _tools(
+            "get_ticket", "flag_ticket", "run_tests", "approve_ticket", "post_comment", "request_changes"),
+    },
     "pr_review": {
         "builtin_tools": ["Read", "Glob", "Grep"],
         "allowed_tools": ["Read", "Glob", "Grep"] + _tools(

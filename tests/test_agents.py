@@ -214,7 +214,7 @@ def test_pr_review_approval_moves_the_ticket_to_qa(conn, repo, tmp_path):
         "WF_ROLE": "pr_review", "WF_KEY": "ABC-1", "WF_DB": str(conn.execute("pragma database_list").fetchone()[2]),
         "WF_WORKTREE": str(wt)}))
     g.approve_ticket({})
-    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_qa"
+    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_perf_review"
     assert "pr_review" in board.approvals_at(conn, "ABC-1", agents.head_of(wt))
 
 
@@ -225,7 +225,7 @@ def test_an_approval_at_head_moves_the_ticket_to_qa_without_another_review(conn,
     board.record_approval(conn, "ABC-1", "pr_review", agents.head_of(wt), clock=clock)
     moved = agents.advance_pipeline(conn, repo=repo)
     assert moved == ["ABC-1"]
-    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_qa"
+    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_perf_review"
 
 
 def test_an_old_approval_does_not_move_a_ticket_after_new_commits(conn, repo, tmp_path):
@@ -321,3 +321,16 @@ def test_other_stages_keep_the_local_app(conn, repo, tmp_path):
     env = json.loads((res.run.output_path.parent / "gateway.json").read_text())["mcpServers"]["gateway"]["env"]
     assert env["WF_APP_URL"] == "http://127.0.0.1:3002"
     assert "WF_BOT_APP" not in env
+
+
+def test_code_performance_review_approval_moves_the_ticket_to_qa(conn, repo, tmp_path):
+    wt = _branch_with_change(repo, tmp_path)
+    conn.execute("update ticket set stage = 'ready_for_perf_review' where key = 'ABC-1'")
+    conn.commit()
+    from wf import gateway_server
+    g = gateway_server.Gateway(gateway_server.Scope({
+        "WF_ROLE": "perf_review", "WF_KEY": "ABC-1", "WF_DB": str(conn.execute("pragma database_list").fetchone()[2]),
+        "WF_WORKTREE": str(wt)}))
+    g.approve_ticket({})
+    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_qa"
+    assert "perf_review" in board.approvals_at(conn, "ABC-1", agents.head_of(wt))

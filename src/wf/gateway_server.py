@@ -177,8 +177,11 @@ class Gateway:
             board.record_approval(conn, self.scope.key, self.scope.role, head)
             stage = conn.execute("select stage from ticket where key = ?", (self.scope.key,)).fetchone()["stage"]
             if self.scope.role == "pr_review" and stage in ("pr_open", "pr_in_review"):
+                board.move_stage(conn, self.scope.key, "ready_for_perf_review", self.scope.role,
+                                 f"PR review approved at {head[:8]}")
+            if self.scope.role == "perf_review" and stage == "ready_for_perf_review":
                 board.move_stage(conn, self.scope.key, "ready_for_qa", self.scope.role,
-                                 f"approved at {head[:8]}")
+                                 f"code performance review approved at {head[:8]}")
         finally:
             conn.close()
         return {"approved": head}

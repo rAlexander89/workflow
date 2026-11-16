@@ -27,6 +27,7 @@ STAGE_PATTERNS: list[tuple[str, str]] = [
     ("in_dev", r"\bdev in progress\b|\bin development\b|\bin dev\b|^in progress$"),
     ("pr_open", r"\bpr open\b|\bpull request open\b"),
     ("pr_in_review", r"\bpr in review\b|\bin review\b"),
+    ("ready_for_perf_review", r"\bready for perf(ormance)? review\b|\bperf review\b"),
     ("ready_for_qa", r"\bready for qa\b|\bready for test(ing)?\b"),
     ("qa_approved", r"\bqa approved\b|\bqa passed\b"),
     ("merged", r"\bmerged\b"),
