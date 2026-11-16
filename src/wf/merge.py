@@ -15,7 +15,7 @@ from pathlib import Path
 
 from wf import agents, board
 
-REQUIRED_APPROVALS = {"pr_review", "qa"}
+REQUIRED_APPROVALS = {"pr_review", "perf_review", "qa"}
 
 
 class MergeBlocked(board.BoardError):
@@ -54,3 +54,27 @@ def merge(conn: sqlite3.Connection, key: str, *, repo: Path, runs_dir: Path, tes
     kwargs = {"clock": clock} if clock else {}
     board.move_stage(conn, key, "merged", "harness", f"merged {branch} at {head[:8]}", **kwargs)
     return head
+
+
+def local_merge_when_clear(conn: sqlite3.Connection, *, repo: Path, runs_dir: Path, test_cmd: str) -> list[str]:
+    """For a repo with no hosted remote: merge each QA-approved ticket into the local main.
+
+    The merge gate is the same (three approvals on the head, passing tests). With no PR host there
+    is no separate dev deploy, so the local app stands in for dev: the merge is recorded as the
+    dev deploy, and regression runs against it.
+    """
+    from wf import observe
+
+    merged = []
+    rows = conn.execute("select key from ticket where stage = 'qa_approved' and removed_at is null").fetchall()
+    for row in rows:
+        key = row["key"]
+        try:
+            head = merge(conn, key, repo=repo, runs_dir=runs_dir, test_cmd=test_cmd)
+        except MergeBlocked:
+            continue
+        sha = agents._git(["rev-parse", "main"], repo)
+        observe._record(conn, key, f"merge:{sha}")
+        observe._record(conn, key, f"dev:success:{sha}")
+        merged.append(key)
+    return merged

@@ -143,7 +143,7 @@ def test_merge_blocked_on_an_old_head(conn, repo, tmp_path):
 def test_merge_blocked_when_tests_fail(conn, repo, tmp_path):
     wt = _branch_with_change(repo, tmp_path)
     _to_qa_approved(conn)
-    for role in ("qa", "pr_review"):
+    for role in ("qa", "pr_review", "perf_review"):
         board.record_approval(conn, "ABC-1", role, agents.head_of(wt), clock=clock)
     with pytest.raises(merge.MergeBlocked, match="tests fail"):
         merge.merge(conn, "ABC-1", repo=repo, runs_dir=tmp_path / "runs", test_cmd="false")
@@ -153,7 +153,7 @@ def test_merge_succeeds_with_both_approvals_and_passing_tests(conn, repo, tmp_pa
     wt = _branch_with_change(repo, tmp_path)
     _to_qa_approved(conn)
     head = agents.head_of(wt)
-    for role in ("qa", "pr_review"):
+    for role in ("qa", "pr_review", "perf_review"):
         board.record_approval(conn, "ABC-1", role, head, clock=clock)
     merge.merge(conn, "ABC-1", repo=repo, runs_dir=tmp_path / "runs", test_cmd="true", clock=clock)
     assert ticket_row(conn, "ABC-1")["stage"] == "merged"
@@ -334,3 +334,15 @@ def test_code_performance_review_approval_moves_the_ticket_to_qa(conn, repo, tmp
     g.approve_ticket({})
     assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_qa"
     assert "perf_review" in board.approvals_at(conn, "ABC-1", agents.head_of(wt))
+
+
+def test_a_local_repo_merges_on_its_own_and_counts_as_dev(conn, repo, tmp_path):
+    from wf import merge as merge_mod, observe
+    wt = _branch_with_change(repo, tmp_path)
+    _set_stage(conn, "qa_approved")
+    for role in ("qa", "pr_review", "perf_review"):
+        board.record_approval(conn, "ABC-1", role, agents.head_of(wt), clock=clock)
+    assert merge_mod.local_merge_when_clear(conn, repo=repo, runs_dir=tmp_path / "runs", test_cmd="true") == ["ABC-1"]
+    assert ticket_row(conn, "ABC-1")["stage"] == "merged"
+    assert observe.dev_deployed(conn, "ABC-1")
+    assert (repo / "app.txt").read_text() == "v2\n"

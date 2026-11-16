@@ -44,6 +44,7 @@ class Forge(Protocol):
     def runs(self, repo: str, branch: str) -> list[dict]: ...
     def jobs(self, repo: str, run_id: str) -> list[dict]: ...
     def job_messages(self, repo: str, job_id: str) -> list[str]: ...
+    def dispatch_prod(self, repo: str, sha: str) -> bool: ...
 
 
 @dataclass
@@ -53,7 +54,7 @@ class GitHub:
 
     def pr_status(self, url: str) -> dict:
         proc = self.runner(["gh", "pr", "view", url, "--json",
-                            "state,mergedAt,mergeStateStatus,statusCheckRollup,headRefOid,commits"], Path("."))
+                            "state,mergedAt,mergeStateStatus,statusCheckRollup,headRefOid,commits,mergeCommit"], Path("."))
         if proc.returncode != 0:
             return {"ok": False, "error": (proc.stderr or "gh failed").strip()[-200:]}
         data = json.loads(proc.stdout or "{}")
@@ -63,6 +64,7 @@ class GitHub:
             "checks": checks_state([(c.get("status", ""), c.get("conclusion", "")) for c in rollup]),
             "merge_state": data.get("mergeStateStatus", ""), "head": data.get("headRefOid", ""),
             "commit_subjects": [c.get("messageHeadline", "") for c in data.get("commits") or []],
+            "merge_sha": (data.get("mergeCommit") or {}).get("oid", ""),
         }
 
     def open_pr(self, repo: str, branch: str, title: str, body: str) -> str:
@@ -96,6 +98,10 @@ class GitHub:
     def job_messages(self, repo: str, job_id: str) -> list[str]:
         proc = self.runner(["gh", "api", f"repos/{repo}/check-runs/{job_id}/annotations"], Path("."))
         return [a.get("message", "") for a in json.loads(proc.stdout or "[]")]
+
+    def dispatch_prod(self, repo: str, sha: str) -> bool:
+        proc = self.runner(["gh", "workflow", "run", "deploy-prod.yml", "--repo", repo, "-f", f"commit={sha}"], Path("."))
+        return proc.returncode == 0
 
 
 @dataclass
@@ -141,6 +147,7 @@ class GitLab:
             "checks": checks_state([(j.get("status", ""), j.get("status", "")) for j in (jobs or [])]),
             "merge_state": mr.get("detailed_merge_status", ""), "head": mr.get("sha", ""),
             "commit_subjects": [c.get("title", "") for c in commits],
+            "merge_sha": mr.get("merge_commit_sha") or mr.get("squash_commit_sha") or "",
         }
 
     def open_pr(self, repo: str, branch: str, title: str, body: str) -> str:
@@ -175,6 +182,14 @@ class GitLab:
                  "conclusion": {"success": "success", "failed": "failure"}.get(j.get("status", ""), ""),
                  "url": j.get("web_url", "")} for j in jobs]
 
+    def dispatch_prod(self, repo: str, sha: str) -> bool:
+        try:
+            self._api(f"/projects/{self._project(repo)}/pipeline", "POST",
+                      {"ref": "main", "variables[0][key]": "COMMIT", "variables[0][value]": sha})
+            return True
+        except RuntimeError:
+            return False
+
     def job_messages(self, repo: str, job_id: str) -> list[str]:
         try:
             j = self._api(f"/projects/{self._project(repo)}/jobs/{job_id}") or {}
@@ -183,12 +198,12 @@ class GitLab:
         return [j.get("failure_reason", "")] if j.get("failure_reason") else []
 
 
-def for_url(url: str, *, hosts: dict[str, str] | None = None) -> Forge:
+def for_url(url: str, *, runner: Runner = _run) -> Forge:
     """Pick the forge from a PR or merge request link."""
     host = urllib.parse.urlparse(url).hostname or ""
     if host in ("", "github.com"):
-        return GitHub()
-    return GitLab(host=host)
+        return GitHub(runner=runner)
+    return GitLab(host=host, runner=runner)
 
 
 def for_repo(forge_name: str, *, host: str = "gitlab.local") -> Forge:

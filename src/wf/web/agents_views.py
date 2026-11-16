@@ -73,6 +73,21 @@ def _repo_path(c, name: str | None) -> Path:
     return Path(repos[name].path)
 
 
+def _link(c):
+    return c.repos[0] if c.repos else None
+
+
+def _forge_for(c):
+    """The forge the linked repo is hosted on: GitHub, or GitLab at its host."""
+    from wf import forge as _forge
+    link = _link(c)
+    if link is None or link.forge == "github":
+        return _forge.GitHub()
+    if link.forge == "gitlab":
+        return _forge.GitLab(host=link.host)
+    return None
+
+
 def _repo_slug(c) -> str:
     repos = c.repos
     if not repos or not repos[0].remote:
@@ -182,17 +197,17 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             for key in [r["key"] for r in conn.execute(
                     "select key from ticket where stage = 'merged' and removed_at is null").fetchall()]:
                 if observe.latest(conn, key, "merge:") is None:
-                    sha = observe.merge_sha(conn, key, _repo_slug(c))
+                    sha = observe.merge_sha(conn, key, _repo_slug(c), forge=_forge_for(c))
                     if sha:
                         _log(f"{key}: merged to main at {sha[:8]}")
-                state = observe.observe_dev(conn, key, _repo_slug(c))
+                state = observe.observe_dev(conn, key, _repo_slug(c), forge=_forge_for(c))
                 if state == "success":
                     _log(f"{key}: deployed to dev")
                 elif state == "failed":
                     _log(f"{key}: dev deploy FAILED")
             for key in [r["key"] for r in conn.execute(
                     "select key from ticket where stage = 'deployed' and removed_at is null").fetchall()]:
-                if observe.observe_prod(conn, key, _repo_slug(c)) == "success":
+                if observe.observe_prod(conn, key, _repo_slug(c), forge=_forge_for(c)) == "success":
                     _log(f"{key}: deployed to prod (observed)")
         finally:
             conn.close()
@@ -208,6 +223,16 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                 with _lock:
                     if _state["running"]:
                         continue
+                from wf import merge as _merge
+                link = _link(c)
+                if link is not None and link.forge == "local":
+                    conn = board.connect(db_path)
+                    try:
+                        for key in _merge.local_merge_when_clear(conn, repo=_repo_path(c, None), runs_dir=_runs_dir(c),
+                                                                  test_cmd=c.agents.test_cmd):
+                            _log(f"{key}: merged into the local main (no hosted remote)")
+                    finally:
+                        conn.close()
                 observe_tick(c)
                 conn = board.connect(db_path)
                 try:
@@ -270,7 +295,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                 _log(f"{key}: deploy refused: regression has not passed on the current commit")
                 return RedirectResponse("/agents", status_code=303)
             from wf import observe
-            if not observe.start_prod_deploy(conn, key, _repo_slug(c)):
+            if not observe.start_prod_deploy(conn, key, _repo_slug(c), forge=_forge_for(c)):
                 _log(f"{key}: deploy refused: the prod workflow could not be started")
                 return RedirectResponse("/agents", status_code=303)
             board.move_stage(conn, key, "deployed", "user", "deployed to prod by the user")

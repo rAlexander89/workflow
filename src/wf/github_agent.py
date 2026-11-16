@@ -75,7 +75,10 @@ def open_pull_request(
 
 
 def publish_ready(conn: sqlite3.Connection, *, repo: Path, runner=None) -> list[str]:
-    """Open the GitHub PR for every ticket that has passed the internal pipeline and has none yet."""
+    """Open the PR for every ticket that has passed QA and has none yet. Local repos have no PR host."""
+    link = next((r for r in _load_repo_links() if Path(r.path) == Path(repo)), None)
+    if link is not None and link.forge == "local":
+        return []
     opened = []
     rows = conn.execute(
         "select key from ticket where stage = 'qa_approved' and removed_at is null "
