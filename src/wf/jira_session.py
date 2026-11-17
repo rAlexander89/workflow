@@ -27,7 +27,8 @@ READ_TOOLS = [
 WRITE_TOOLS = ["mcp__atlassian__transitionJiraIssue"]
 BUILTIN_OFF = ["Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch"]
 
-SYNC_JQL = "assignee = currentUser() AND sprint in openSprints()"
+SYNC_JQL = ("assignee = currentUser() AND (sprint in openSprints() "
+            "OR (sprint is EMPTY AND statusCategory != Done))")
 
 SYNC_PROMPT = f"""You are the Jira reader for the wf workflow. Use only the Atlassian tools.
 

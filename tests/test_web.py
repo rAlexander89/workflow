@@ -113,3 +113,22 @@ def test_runs_list_shows_status(client):
     client.post("/runs", data={"request": "first request"})
     r = client.get("/runs")
     assert "first request" in r.text and "waiting_for_approval" in r.text
+
+
+
+def test_a_tunneled_request_reaches_only_the_webhooks(client):
+    assert client.get("/agents", headers={"x-forwarded-for": "203.0.113.5"}).status_code == 404
+    assert client.get("/agents").status_code == 200
+
+
+def test_a_jira_webhook_needs_the_token_and_wakes_the_sync(client, monkeypatch):
+    from wf.web import agents_views
+    monkeypatch.setenv("WF_JIRA_WEBHOOK_TOKEN", "tok123")
+    assert client.post("/webhooks/jira/wrong", json={"webhookEvent": "jira:issue_updated"}).status_code == 403
+    agents_views._jira_changed.clear()
+    r = client.post("/webhooks/jira/tok123", json={"webhookEvent": "jira:issue_updated"})
+    assert r.status_code == 200
+    assert agents_views._jira_changed.is_set()
+    agents_views._jira_changed.clear()
+    client.post("/webhooks/jira/tok123", json={"webhookEvent": "comment_created"})
+    assert not agents_views._jira_changed.is_set()

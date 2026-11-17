@@ -18,7 +18,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from wf import agents, board, github_webhook
+from wf import agents, board, github_webhook, jira_webhook
 from wf import config as cfgmod
 from wf import claude_run, github_agent, jira_session, merge, outbox
 from wf.web import pipeline as stage_view
@@ -28,6 +28,7 @@ templates = Jinja2Templates(directory=str(HERE / "templates"))
 
 _lock = threading.Lock()
 _wake = threading.Event()  # set by a relevant GitHub webhook: the auto loop checks now, not in 15s
+_jira_changed = threading.Event()  # set by a Jira webhook: the auto loop reads Jira again now
 _state: dict = {"running": None, "log": [], "last": None}
 
 
@@ -242,6 +243,10 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             _wake.clear()
             try:
                 c = settings()
+                if _jira_changed.is_set() and c.model.claude_code_access:
+                    _jira_changed.clear()
+                    if not _start("jira sync", _jira_sync_work(c)):
+                        _jira_changed.set()  # busy: try again on the next pass
                 if not (c.agents.auto_run and c.repos and c.model.claude_code_access):
                     continue
                 with _lock:
@@ -370,10 +375,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         return {"access": c.model.claude_code_access, "workdir": _runs_dir(c) / "jira-session",
                 "model": c.agents.model, "claude_bin": _claude_bin()}
 
-    @app.post("/agents/jira/sync")
-    def jira_sync():
-        c = settings()
-
+    def _jira_sync_work(c):
         def work():
             payload = jira_session.fetch_sync_payload(**_session_kw(c))
             conn = board.connect(db_path)
@@ -387,10 +389,38 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                  f"{counts.get('tickets_created', 0)} new, {counts.get('tickets_updated', 0)} updated")
             for problem in result.problems:
                 _log(f"sync: {problem}")
+        return work
 
-        if not _start("jira sync", work):
+    @app.post("/agents/jira/sync")
+    def jira_sync():
+        c = settings()
+        if not _start("jira sync", _jira_sync_work(c)):
             _log("another action is already running")
         return RedirectResponse("/agents", status_code=303)
+
+    @app.middleware("http")
+    async def tunnel_only_webhooks(request: Request, call_next):
+        """A public tunnel reaches the webhook receivers only. Local pages stay local."""
+        host = request.headers.get("host", "").rsplit(":", 1)[0]
+        tunneled = "x-forwarded-for" in request.headers or host.endswith((".ngrok-free.app", ".ngrok.app", ".ngrok.io"))
+        if tunneled and not request.url.path.startswith("/webhooks/"):
+            return PlainTextResponse("not found", status_code=404)
+        return await call_next(request)
+
+    @app.post("/webhooks/jira/{token}")
+    async def jira_hook(token: str, request: Request):
+        """Jira says a ticket or sprint changed. We read Jira again now."""
+        expected = os.environ.get("WF_JIRA_WEBHOOK_TOKEN", "")
+        if not jira_webhook.token_ok(expected, token):
+            raise HTTPException(403, "bad token")
+        try:
+            event = (await request.json()).get("webhookEvent")
+        except Exception:
+            event = None
+        if jira_webhook.is_relevant(event):
+            _jira_changed.set()
+            _wake.set()
+        return {"ok": True, "event": event}
 
     @app.post("/agents/jira/send")
     def jira_send(confirm: str = Form("")):
