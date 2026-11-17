@@ -54,3 +54,9 @@ def test_one_status_per_stage_is_mapped():
     mapped = {r.stage: r.status_name for r in rows if r.status_name}
     assert mapped == {"backlog": "Backlog", "ready_for_dev": "Ready for dev", "in_dev": "Dev in progress"}
     assert problems == []
+
+
+def test_open_and_to_do_are_backlog_statuses():
+    assert stages_for("Open") == ["backlog"]
+    assert stages_for("To Do") == ["backlog"]
+    assert stages_for("PR open") == ["pr_open"]

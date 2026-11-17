@@ -1,0 +1,9 @@
+<nav class="subtabs">
+  <a href="/agents" class="{% if tab == 'pipeline' %}on{% endif %}">Pipeline</a>
+  <a href="/board/backlog" class="{% if tab == 'backlog' %}on{% endif %}">Backlog</a>
+</nav>
+<style>
+  .subtabs { display:flex; gap:4px; border-bottom:1px solid #2a2e38; margin:0 0 18px; }
+  .subtabs a { padding:8px 14px; color:#9aa3b2; text-decoration:none; border-bottom:2px solid transparent; }
+  .subtabs a.on { color:#f2f4f8; border-bottom-color:#eec13f; }
+</style>

@@ -422,6 +422,31 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             _wake.set()
         return {"ok": True, "event": event}
 
+    @app.post("/board/item/{key}/to-sprint")
+    def move_to_sprint(key: str):
+        """The user asks for one of their tickets to join the active sprint. Jira is written, then read back."""
+        import re as _re
+        if not _re.fullmatch(r"[A-Z][A-Z0-9]+-\d+", key):
+            raise HTTPException(400, "bad ticket key")
+        c = settings()
+        conn = board.connect(db_path)
+        try:
+            sprint = conn.execute("select id, name from sprint where state = 'active' order by id limit 1").fetchone()
+        finally:
+            conn.close()
+        if sprint is None:
+            _log(f"{key}: no active sprint to move into")
+            return RedirectResponse(f"/board/item/{key}", status_code=303)
+
+        def work():
+            jira_session.move_to_sprint(key, sprint["id"], **_session_kw(c))
+            _log(f"{key}: moved to {sprint['name']} in Jira")
+            _jira_sync_work(c)()
+
+        if not _start(f"move {key} to sprint", work):
+            _log("another action is already running")
+        return RedirectResponse(f"/board/item/{key}", status_code=303)
+
     @app.post("/agents/jira/send")
     def jira_send(confirm: str = Form("")):
         c = settings()

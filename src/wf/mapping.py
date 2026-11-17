@@ -19,7 +19,7 @@ from dataclasses import dataclass
 # Order is the order of the workflow. Patterns are matched against the normalized
 # status name (lowercase, punctuation replaced by spaces).
 STAGE_PATTERNS: list[tuple[str, str]] = [
-    ("backlog", r"\bbacklog\b"),
+    ("backlog", r"\bbacklog\b|^open$|^to do$"),
     ("needs_refinement", r"\bneeds refinement\b|\bto refine\b"),
     ("in_refinement", r"\bin refinement\b"),
     ("hotfix_review", r"\bhotfix review\b"),

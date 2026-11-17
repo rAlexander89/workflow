@@ -471,3 +471,14 @@ def test_workflow_statuses_survive_a_sync_without_tickets_in_them(conn):
     sync(conn, fresh)
     names = {r["name"] for r in conn.execute("select name from project_status where project_key='ABC'")}
     assert "Needs refinement" in names
+
+
+def test_assignee_name_and_links_are_stored(conn):
+    t = ticket("ABC-7", status="Ready for dev")
+    t["assignee_name"] = "Pat Tester"
+    t["links"] = [{"type": "blocks", "direction": "outward", "key": "ABC-8", "summary": "Next", "status": "To Do"}]
+    board.apply_payload(conn, payload(tickets=[t]))
+    row = conn.execute("select assignee_name from ticket where key = 'ABC-7'").fetchone()
+    assert row["assignee_name"] == "Pat Tester"
+    link = conn.execute("select * from ticket_link where ticket_key = 'ABC-7'").fetchone()
+    assert (link["other_key"], link["link_type"], link["other_summary"]) == ("ABC-8", "blocks", "Next")

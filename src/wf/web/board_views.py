@@ -77,11 +77,51 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
 
     @app.get("/board/backlog", response_class=HTMLResponse)
     def backlog_page(request: Request):
+        from datetime import datetime
+        from wf.web import pipeline as _pipeline
         c = conn()
         try:
-            rows = board.backlog(c)
-            return page(request, "backlog.html", "backlog",
-                        groups=group_by_stage(rows), total=len(rows), sync=sync_line(c))
+            rows = []
+            for r in board.backlog(c):
+                t = dict(r)
+                parts = (t.get("assignee_name") or "").split()
+                t["initials"] = "".join(p[0] for p in parts[:2]).upper()
+                t["stage_label"] = _pipeline.STAGE_INFO.get(t["stage"], ("To do", ""))[0] if t["stage"] else "To do"
+                t["updated_text"] = datetime.fromtimestamp(t["jira_updated"]).strftime("%b %d") if t.get("jira_updated") else ""
+                rows.append(t)
+            rows.sort(key=lambda t: t.get("jira_updated") or 0, reverse=True)
+            return page(request, "backlog.html", "backlog", tickets=rows, sync=sync_line(c))
+        finally:
+            c.close()
+
+    @app.get("/board/item/{key}", response_class=HTMLResponse)
+    def item_page(request: Request, key: str):
+        from datetime import datetime
+        from wf.web import pipeline as _pipeline
+
+        def when(ts):
+            return datetime.fromtimestamp(ts).strftime("%b %d, %Y %H:%M") if ts else ""
+
+        c = conn()
+        try:
+            detail = board.ticket_detail(c, key)
+            if detail is None:
+                return HTMLResponse("No such ticket.", status_code=404)
+            t = detail["ticket"]
+            active = c.execute("select id, name from sprint where state = 'active' order by id limit 1").fetchone()
+            sprint = c.execute("select name from sprint where id = ?", (t["sprint_id"],)).fetchone() if t["sprint_id"] else None
+            links = [dict(r) for r in c.execute(
+                "select * from ticket_link where ticket_key = ? order by link_type, other_key", (key,))]
+            comments = [dict(x, when=when(x["created_at"])) for x in detail["comments"]]
+            events = [dict(x, when=when(x["at"])) for x in reversed(detail["events"])]
+            stage = t["stage"]
+            return page(request, "item.html", "backlog", ticket=t, links=links, comments=comments,
+                        events=events, labels=json.loads(t["labels"] or "[]"), stage=stage,
+                        stage_label=_pipeline.STAGE_INFO.get(stage, ("To do", ""))[0] if stage else "Not started",
+                        active_sprint=dict(active) if active else None,
+                        in_active_sprint=bool(active and t["sprint_id"] == active["id"]),
+                        sprint_name=sprint["name"] if sprint else None,
+                        updated_text=when(t.get("jira_updated")), synced_text=when(t.get("synced_at")))
         finally:
             c.close()
 

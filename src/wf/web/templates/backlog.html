@@ -1,7 +1,66 @@
 {% extends "base.html" %}
 {% block title %}Backlog{% endblock %}
 {% block content %}
-<h1>Backlog</h1>
-<p class="muted">{{ total }} tickets in no sprint. {% if sync.run %}Last sync: {{ sync.run.kind }} {{ sync.run.status }}, {{ sync.age_text }}.{% else %}Never synced.{% endif %}</p>
-{% include "_stages.html" %}
+{% with tab="backlog" %}{% include "_tabs.html" %}{% endwith %}
+<style>
+  .bl-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:14px; }
+  .bl-table { width:100%; border-collapse:collapse; }
+  .bl-table th { text-align:left; font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase;
+                 color:#7d8696; padding:8px 10px; border-bottom:1px solid #2a2e38; }
+  .bl-table td { padding:12px 10px; border-bottom:1px solid #1f232b; vertical-align:middle; }
+  .bl-table tr:hover td { background:#171b22; }
+  .bl-key { font-family:ui-monospace,Menlo,monospace; color:#9aa3b2; font-size:13px; white-space:nowrap; }
+  .bl-title a { color:#f2f4f8; text-decoration:none; font-weight:600; }
+  .bl-title a:hover { text-decoration:underline; }
+  .pill { display:inline-block; padding:3px 9px; border-radius:999px; font-size:12px; background:#252a34; color:#c4cad6;
+          white-space:nowrap; }
+  .pill.todo { background:#1f2a3d; color:#8fb8ff; }
+  .pill.none { background:transparent; border:1px dashed #3a404c; color:#7d8696; }
+  .who { display:flex; align-items:center; gap:8px; white-space:nowrap; }
+  .avatar { width:26px; height:26px; border-radius:50%; background:#3a3324; color:#eec13f; font-size:11px;
+            font-weight:700; display:flex; align-items:center; justify-content:center; }
+  .who.unassigned .avatar { background:#252a34; color:#7d8696; }
+  .muted-cell { color:#7d8696; font-size:13px; white-space:nowrap; }
+  .empty { padding:40px; text-align:center; color:#7d8696; border:1px dashed #2a2e38; border-radius:10px; }
+  @media (max-width: 760px) {
+    .bl-table thead { display:none; }
+    .bl-table tr { display:block; border-bottom:1px solid #1f232b; padding:10px 0; }
+    .bl-table td { display:block; border:0; padding:3px 0; }
+  }
+</style>
+<div class="bl-head">
+  <div>
+    <h1 style="margin:0">Backlog</h1>
+    <p class="muted" style="margin:4px 0 0">{{ tickets|length }} ticket{{ '' if tickets|length == 1 else 's' }} assigned to you, not in a sprint.
+      {% if sync.run %}Last sync {{ sync.age_text }}.{% else %}Never synced.{% endif %}</p>
+  </div>
+</div>
+{% if tickets %}
+<table class="bl-table">
+  <thead><tr><th>Key</th><th>Ticket</th><th>State</th><th>Assigned to</th><th>Priority</th><th>Updated</th></tr></thead>
+  <tbody>
+  {% for t in tickets %}
+    <tr>
+      <td class="bl-key">{{ t.key }}</td>
+      <td class="bl-title"><a href="/board/item/{{ t.key }}">{{ t.summary }}</a></td>
+      <td>
+        <span class="pill">Jira: {{ t.jira_status or 'unknown' }}</span>
+        <span class="pill {{ 'todo' if t.stage_label == 'To do' else 'none' }}">{{ t.stage_label }}</span>
+      </td>
+      <td>
+        {% if t.assignee_name %}
+        <span class="who"><span class="avatar">{{ t.initials }}</span>{{ t.assignee_name }}</span>
+        {% else %}
+        <span class="who unassigned"><span class="avatar">?</span>Unassigned</span>
+        {% endif %}
+      </td>
+      <td class="muted-cell">{{ t.priority or '—' }}</td>
+      <td class="muted-cell">{{ t.updated_text }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">No backlog tickets. Press <b>Sync from Jira</b> on the Pipeline tab to pull them in.</div>
+{% endif %}
 {% endblock %}

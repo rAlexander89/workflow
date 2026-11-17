@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ ticket.key }}{% endblock %}
+{% block content %}
+<style>
+  .it-back { color:#9aa3b2; text-decoration:none; font-size:14px; }
+  .it-key { font-family:ui-monospace,Menlo,monospace; color:#9aa3b2; margin-top:14px; }
+  .it-title { margin:4px 0 12px; font-size:26px; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+  .chip { padding:4px 10px; border-radius:999px; background:#252a34; color:#c4cad6; font-size:13px; }
+  .chip.todo { background:#1f2a3d; color:#8fb8ff; }
+  .card { background:#14171d; border:1px solid #232831; border-radius:12px; padding:18px 20px; margin-bottom:16px; }
+  .card h2 { margin:0 0 12px; font-size:13px; letter-spacing:.06em; text-transform:uppercase; color:#7d8696; }
+  .body { white-space:pre-wrap; word-wrap:break-word; line-height:1.55; color:#d6dbe4; margin:0; font-family:inherit; }
+  .row2 { display:grid; grid-template-columns:140px 1fr; gap:8px 14px; font-size:14px; }
+  .row2 dt { color:#7d8696; }
+  .row2 dd { margin:0; color:#e6e9ef; }
+  .cmt { border-top:1px solid #1f232b; padding:12px 0; }
+  .cmt:first-of-type { border-top:0; padding-top:0; }
+  .cmt .who-line { font-size:13px; color:#9aa3b2; margin-bottom:6px; }
+  .lnk { display:flex; gap:10px; align-items:baseline; padding:8px 0; border-top:1px solid #1f232b; font-size:14px; }
+  .lnk:first-of-type { border-top:0; }
+  .lnk code { color:#eec13f; font-size:13px; }
+  .ev { font-size:13px; color:#9aa3b2; padding:4px 0; }
+  .btn { background:#eec13f; color:#1a1500; border:0; border-radius:8px; padding:10px 16px; font-weight:600; cursor:pointer; }
+  .btn[disabled] { background:#2a2e38; color:#6b7385; cursor:not-allowed; }
+  .hint { color:#7d8696; font-size:13px; margin-top:8px; }
+</style>
+<a class="it-back" href="/board/backlog">← Backlog</a>
+<div class="it-key">{{ ticket.key }} · {{ ticket.issue_type or 'Ticket' }}</div>
+<h1 class="it-title">{{ ticket.summary }}</h1>
+<div class="chips">
+  <span class="chip">Jira: {{ ticket.jira_status or 'unknown' }}</span>
+  <span class="chip {{ 'todo' if not ticket.stage }}">{{ stage_label }}</span>
+  {% if ticket.priority %}<span class="chip">{{ ticket.priority }}</span>{% endif %}
+  {% for l in labels %}<span class="chip">{{ l }}</span>{% endfor %}
+</div>
+
+<div class="card">
+  <h2>Move to the current sprint</h2>
+  {% if active_sprint and not in_active_sprint %}
+  <form method="post" action="/board/item/{{ ticket.key }}/to-sprint">
+    <button class="btn" type="submit">Move to {{ active_sprint.name }}</button>
+  </form>
+  <div class="hint">Sets the sprint in Jira, then reads Jira again. Nothing else on the ticket changes.</div>
+  {% elif in_active_sprint %}
+  <button class="btn" disabled>Already in {{ active_sprint.name }}</button>
+  {% else %}
+  <button class="btn" disabled>No active sprint</button>
+  <div class="hint">Start a sprint in Jira first.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Details</h2>
+  <dl class="row2">
+    <dt>Assigned to</dt><dd>{{ ticket.assignee_name or 'Unassigned' }}</dd>
+    <dt>Sprint</dt><dd>{{ sprint_name or 'None (backlog)' }}</dd>
+    <dt>Internal stage</dt><dd>{{ stage_label }}</dd>
+    <dt>Last updated in Jira</dt><dd>{{ updated_text }}</dd>
+    <dt>Last synced</dt><dd>{{ synced_text }}</dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h2>Description</h2>
+  {% if ticket.description %}<pre class="body">{{ ticket.description }}</pre>{% else %}<div class="hint">No description.</div>{% endif %}
+</div>
+
+<div class="card">
+  <h2>Linked tickets ({{ links|length }})</h2>
+  {% for l in links %}
+  <div class="lnk"><span>{{ l.link_type }}{% if l.direction %} ({{ l.direction }}){% endif %}</span>
+    <code><a href="/board/item/{{ l.other_key }}" style="color:#eec13f">{{ l.other_key }}</a></code>
+    <span>{{ l.other_summary or '' }}</span><span class="hint" style="margin:0 0 0 auto">{{ l.other_status or '' }}</span></div>
+  {% else %}<div class="hint">No linked tickets.</div>{% endfor %}
+</div>
+
+<div class="card">
+  <h2>Comments ({{ comments|length }})</h2>
+  {% for c in comments %}
+  <div class="cmt"><div class="who-line"><b style="color:#e6e9ef">{{ c.author }}</b> · {{ c.when }}</div>
+    <pre class="body">{{ c.body }}</pre></div>
+  {% else %}<div class="hint">No comments.</div>{% endfor %}
+</div>
+
+<div class="card">
+  <h2>Activity</h2>
+  {% for e in events %}
+  <div class="ev">{{ e.when }} · {{ e.actor }} · {{ e.kind }}{% if e.detail %} · {{ e.detail }}{% endif %}</div>
+  {% else %}<div class="hint">No activity yet.</div>{% endfor %}
+</div>
+{% if stage %}<p><a href="/board/ticket/{{ ticket.key }}" style="color:#eec13f">Open this ticket in the pipeline →</a></p>{% endif %}
+{% endblock %}

@@ -188,8 +188,25 @@ def connect(path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("pragma foreign_keys = on")
     conn.executescript(SCHEMA)
+    cols = [r[1] for r in conn.execute("pragma table_info(ticket)")]
+    if "assignee_name" not in cols:
+        conn.execute("alter table ticket add column assignee_name text")
+    conn.executescript(LINK_SCHEMA)
     conn.execute(f"pragma user_version = {SCHEMA_VERSION}")
     return conn
+
+
+LINK_SCHEMA = """
+create table if not exists ticket_link (
+    ticket_key    text not null,
+    other_key     text not null,
+    link_type     text not null,
+    direction     text not null,
+    other_summary text,
+    other_status  text,
+    primary key (ticket_key, other_key, link_type)
+);
+"""
 
 
 # --- payload validation ---------------------------------------------------------
@@ -347,12 +364,12 @@ def _apply_tickets(conn: sqlite3.Connection, data: dict, kind: str, now: int, re
             conn.execute(
                 "insert into ticket (key, project_key, jira_id, summary, description, acceptance, issue_type, "
                 "priority, points, assignee_id, jira_status, jira_status_category, labels, sprint_id, stage, "
-                "flags, jira_updated, synced_at, removed_at) "
-                "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, null)",
+                "flags, jira_updated, synced_at, removed_at, assignee_name) "
+                "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, null, ?)",
                 (key, t["project_key"], str(t["jira_id"]), t["summary"], t.get("description"),
                  t.get("acceptance"), t.get("issue_type"), t.get("priority"), t.get("points"),
                  t.get("assignee_id"), status, t.get("status_category"), _json(labels), sprint_id,
-                 stage, t.get("updated"), now),
+                 stage, t.get("updated"), now, t.get("assignee_name")),
             )
             _event(conn, key, now, "sync", "sync", None, sprint_id, "created")
             result.bump("tickets_created")
@@ -376,10 +393,11 @@ def _update_ticket(conn, existing, t, status, stage, labels, sprint_id, now, res
     conn.execute(
         "update ticket set summary = ?, description = ?, acceptance = ?, issue_type = ?, priority = ?, "
         "points = ?, assignee_id = ?, jira_status = ?, jira_status_category = ?, labels = ?, "
-        "sprint_id = ?, stage = ?, jira_updated = ?, synced_at = ?, removed_at = null where key = ?",
+        "sprint_id = ?, stage = ?, jira_updated = ?, synced_at = ?, removed_at = null, assignee_name = ? "
+        "where key = ?",
         (t["summary"], t.get("description"), t.get("acceptance"), t.get("issue_type"), t.get("priority"),
          t.get("points"), t.get("assignee_id"), status, t.get("status_category"), _json(labels),
-         sprint_id, new_stage, t.get("updated"), now, key),
+         sprint_id, new_stage, t.get("updated"), now, t.get("assignee_name"), key),
     )
     if status_changed:
         _event(conn, key, now, "sync", "status", existing["jira_status"], status)
@@ -413,6 +431,21 @@ def _remove_missing(conn, keys, seen: set[str], now: int, result: SyncResult, re
         conn.execute("update ticket set removed_at = ? where key = ?", (now, key))
         _event(conn, key, now, "sync", "sync", row["sprint_id"], None, reason)
         result.bump("removed")
+
+
+def _apply_links(conn, data: dict, result: SyncResult) -> None:
+    """Replace each synced ticket's links with the ones Jira reports now."""
+    for t in _list(data, "tickets"):
+        if "links" not in t or conn.execute("select 1 from ticket where key = ?", (t["key"],)).fetchone() is None:
+            continue
+        conn.execute("delete from ticket_link where ticket_key = ?", (t["key"],))
+        for link in t.get("links") or []:
+            conn.execute(
+                "insert or replace into ticket_link (ticket_key, other_key, link_type, direction, other_summary, "
+                "other_status) values (?, ?, ?, ?, ?, ?)",
+                (t["key"], link["key"], link.get("type") or "related", link.get("direction") or "",
+                 link.get("summary"), link.get("status")))
+            result.bump("links")
 
 
 def _apply_comments(conn, data: dict, now: int, result: SyncResult) -> None:
@@ -467,6 +500,7 @@ def apply_payload(conn: sqlite3.Connection, data: dict, clock: Callable[[], floa
                                 still_in=lambda row: row["sprint_id"] is None)
 
             _apply_comments(conn, data, now, result)
+            _apply_links(conn, data, result)
             conn.execute(
                 "update sync_run set finished_at = ?, status = 'ok', counts = ? where id = ?",
                 (int(clock()), json.dumps(result.counts), run_id),

@@ -5,7 +5,7 @@ from __future__ import annotations
 from wf import agents, mapping
 
 STAGE_INFO: dict[str, tuple[str, str]] = {
-    "backlog": ("Backlog", "Not started"),
+    "backlog": ("To do", "Not started"),
     "needs_refinement": ("Needs refinement", "Product"),
     "in_refinement": ("In refinement", "Staff"),
     "hotfix_review": ("Hotfix review", "Staff"),
