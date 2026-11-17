@@ -26,9 +26,11 @@ import time
 from typing import Callable
 
 from wf import mapping
-from wf.adapters.persistence.sqlite.board import SqliteBoardUnitOfWork
+from wf.adapters.persistence.sqlite.board import SqliteBoardUnitOfWork, SqliteStageMappings, SqliteTicketRepository
 from wf.adapters.persistence.sqlite.board_queries import (  # noqa: F401
-    active_board, backlog, counts, last_sync, sprints, status_to_stage, ticket_detail, unmapped_stages,
+    active_board, backlog, counts, database_path, keys_in_stages, kicked_back_dependents, last_sync, pipeline_row,
+    pipeline_rows, qa_approved_without_pr, ready_candidates, sprint_backlog_keys, sprints, stage_by_key,
+    status_to_stage, ticket_detail, unmapped_stages,
 )
 from wf.adapters.persistence.sqlite.board_sync import (  # noqa: F401
     _stage_for, apply_payload, carry_workflow_statuses, sync_file,
@@ -36,6 +38,9 @@ from wf.adapters.persistence.sqlite.board_sync import (  # noqa: F401
 from wf.adapters.persistence.sqlite.schema import LINK_SCHEMA, SCHEMA, SCHEMA_VERSION, connect  # noqa: F401
 from wf.application.board.tickets import TicketCommands
 from wf.domain.board.errors import BoardError  # noqa: F401
+from wf.domain.board import events
+from wf.domain.board.events import TicketEvent
+from wf.domain.board.ticket import Ticket
 from wf.domain.board.moves import ALLOWED_MOVES, FLAGS, may_move  # noqa: F401
 from wf.domain.board.payload import (  # noqa: F401
     SPRINT_STATES, STATUS_CATEGORIES, SYNC_KINDS, SyncResult, validate,
@@ -148,3 +153,35 @@ def set_order(conn: sqlite3.Connection, key: str, position: int, actor: str,
               clock: Callable[[], float] = time.time) -> None:
     """Where the ticket sits in the sprint's work order. Lower goes first. Unordered tickets go last."""
     _commands(conn, clock).set_order(key, position, actor)
+
+
+# --- single-ticket facts and events, for the modules that have not moved to use cases yet ---
+
+def get_ticket(conn: sqlite3.Connection, key: str) -> Ticket | None:
+    """The ticket, including one removed from scope, or None if the key is unknown."""
+    return SqliteTicketRepository(conn).get(key)
+
+
+def passed_regression(conn: sqlite3.Connection, key: str) -> bool:
+    """QA moved the ticket from regression to deployed."""
+    return events.passed_regression(SqliteTicketRepository(conn).history(key))
+
+
+def status_for(conn: sqlite3.Connection, project_key: str, stage: str) -> str | None:
+    """The project's Jira status mapped to this stage, or None."""
+    return SqliteStageMappings(conn).status_for(project_key, stage)
+
+
+def last_event_detail(conn: sqlite3.Connection, key: str, kind: str) -> str | None:
+    return SqliteTicketRepository(conn).last_event_detail(key, kind)
+
+
+def event_details(conn: sqlite3.Connection, key: str, kind: str) -> list[str]:
+    return SqliteTicketRepository(conn).event_details(key, kind)
+
+
+def record_event(conn: sqlite3.Connection, key: str, actor: str, kind: str, detail: str,
+                 clock: Callable[[], float] = time.time) -> None:
+    """Record a note on the ticket's history (an observation, a PR link), committed at once."""
+    with conn:
+        SqliteTicketRepository(conn).append_event(TicketEvent(key, int(clock()), actor, kind, None, None, detail))

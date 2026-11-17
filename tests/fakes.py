@@ -194,16 +194,26 @@ class MemoryTicketRepository:
     def get(self, key):
         t = self._s.tickets.get(key)
         return None if t is None else Ticket(t.key, t.project_key, t.stage, list(t.flags), t.removed,
-                                             t.sort_order, t.jira_status)
+                                             t.sort_order, t.jira_status, t.summary)
 
     def save(self, ticket):
         self._s.tickets[ticket.key] = Ticket(ticket.key, ticket.project_key, ticket.stage, list(ticket.flags),
-                                             ticket.removed, ticket.sort_order, ticket.jira_status)
+                                             ticket.removed, ticket.sort_order, ticket.jira_status, ticket.summary)
         self._s.history.setdefault(ticket.key, []).extend(ticket.events)
         ticket.events.clear()
 
     def history(self, key):
         return list(self._s.history.get(key, []))
+
+    def last_event_detail(self, key, kind):
+        rows = [e for e in reversed(self._s.history.get(key, [])) if e.kind == kind]
+        return rows[0].detail if rows else None
+
+    def event_details(self, key, kind):
+        return [e.detail for e in reversed(self._s.history.get(key, [])) if e.kind == kind]
+
+    def append_event(self, event):
+        self._s.history.setdefault(event.ticket_key, []).append(event)
 
     def add_comment(self, key, origin, author, body, at):
         self._s.comments.append({"key": key, "origin": origin, "author": author, "body": body, "at": at})

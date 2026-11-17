@@ -27,6 +27,12 @@ def approvals_since_stage(history: list[TicketEvent], head: str, stage: str) -> 
     return {e.actor for e in history if e.kind == "approve" and e.detail == head and e.at >= entered}
 
 
+def passed_regression(history: list[TicketEvent]) -> bool:
+    """QA moved the ticket from regression to deployed: it passed regression on dev."""
+    return any(e.kind == "stage" and e.from_value == "regression" and e.to_value == "deployed"
+               and e.actor == "qa" for e in history)
+
+
 def perf_requested(history: list[TicketEvent]) -> bool:
     return any(e.kind == "perf_request" for e in history)
 

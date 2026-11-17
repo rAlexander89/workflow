@@ -68,23 +68,12 @@ class PickupPlan:
         }
 
 
-def _candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute(
-        """select t.*, s.name as sprint_name, s.state as sprint_state
-             from ticket t left join sprint s on s.id = t.sprint_id
-            where t.stage = ? and t.removed_at is null
-            order by t.key""",
-        (PICKUP_FROM,),
-    ).fetchall()
+def _candidates(conn: sqlite3.Connection) -> list[dict]:
+    return board.ready_candidates(conn, PICKUP_FROM)
 
 
 def _jira_target(conn: sqlite3.Connection, key: str) -> str | None:
-    row = conn.execute("select project_key from ticket where key = ?", (key,)).fetchone()
-    target = conn.execute(
-        "select status_name from stage_mapping where project_key = ? and stage = ? and status_name is not null",
-        (row["project_key"], PICKUP_TO),
-    ).fetchone()
-    return target["status_name"] if target else None
+    return board.status_for(conn, board.get_ticket(conn, key).project_key, PICKUP_TO)
 
 
 def plan_pickup(conn: sqlite3.Connection, apply: bool = False,

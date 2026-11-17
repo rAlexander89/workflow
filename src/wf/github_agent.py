@@ -31,22 +31,18 @@ def _load_repo_links():
 
 
 def _passed_regression(conn: sqlite3.Connection, key: str) -> bool:
-    row = conn.execute(
-        "select 1 from ticket_event where ticket_key = ? and kind = 'stage' "
-        "and from_value = 'regression' and to_value = 'deployed' and actor = 'qa'",
-        (key,)).fetchone()
-    return row is not None
+    return board.passed_regression(conn, key)
 
 
 def open_pull_request(
     conn: sqlite3.Connection, key: str, *, repo: Path, confirm: bool,
     runner: Callable[[list[str], Path], "subprocess.CompletedProcess[str]"] | None = None,
 ) -> str:
-    row = conn.execute("select stage, summary from ticket where key = ?", (key,)).fetchone()
+    row = board.get_ticket(conn, key)
     if row is None:
         raise PublishBlocked(f"no ticket {key}")
-    if row["stage"] not in ("qa_approved", "merged", "regression", "performance", "deployed"):
-        raise PublishBlocked(f"{key} is in {row['stage']}; it must pass QA first")
+    if row.stage not in ("qa_approved", "merged", "regression", "performance", "deployed"):
+        raise PublishBlocked(f"{key} is in {row.stage}; it must pass QA first")
     if not confirm:
         raise PublishBlocked("publishing to GitHub needs an explicit confirm")
     remote = subprocess.run(["git", "remote", "get-url", "origin"], cwd=repo,
@@ -58,19 +54,17 @@ def open_pull_request(
     pushed = run(["git", "push", "-u", "origin", branch], repo)
     if pushed.returncode != 0:
         raise PublishBlocked(f"could not push {branch}: {pushed.stderr.strip()[-300:]}")
-    body = f"Ticket {key}: {row['summary']}\n\nPassed the internal pipeline, including regression.\n\n{ATTRIBUTION}"
+    body = f"Ticket {key}: {row.summary}\n\nPassed the internal pipeline, including regression.\n\n{ATTRIBUTION}"
     from wf import forge as _forge
     link = next((r for r in _load_repo_links() if Path(r.path) == Path(repo)), None)
     forge_name = link.forge if link else "github"
     f = _forge.GitHub(runner=lambda argv, cwd: run(argv, cwd)) if forge_name == "github" else \
         _forge.GitLab(host=link.host, runner=lambda argv, cwd: run(argv, cwd))
     try:
-        url = f.open_pr(link.remote if link else "", branch, f"{key}: {row['summary']}", body)
+        url = f.open_pr(link.remote if link else "", branch, f"{key}: {row.summary}", body)
     except RuntimeError as e:
         raise PublishBlocked(f"could not open the PR: {e}")
-    with conn:
-        conn.execute("insert into ticket_event (ticket_key, at, actor, kind, from_value, to_value, detail) "
-                     "values (?, strftime('%s','now'), 'harness', 'pr', null, null, ?)", (key, url))
+    board.record_event(conn, key, "harness", "pr", url)
     return url
 
 
@@ -80,13 +74,10 @@ def publish_ready(conn: sqlite3.Connection, *, repo: Path, runner=None) -> list[
     if link is not None and link.forge == "local":
         return []
     opened = []
-    rows = conn.execute(
-        "select key from ticket where stage = 'qa_approved' and removed_at is null "
-        "and key not in (select ticket_key from ticket_event where kind = 'pr')").fetchall()
-    for row in rows:
+    for key in board.qa_approved_without_pr(conn):
         try:
-            open_pull_request(conn, row["key"], repo=repo, confirm=True, runner=runner)
-            opened.append(row["key"])
+            open_pull_request(conn, key, repo=repo, confirm=True, runner=runner)
+            opened.append(key)
         except PublishBlocked:
             continue
     return opened
@@ -114,24 +105,19 @@ def merge_when_clear(conn: sqlite3.Connection, *, repo: Path, runner=None, statu
 
     run = runner or (lambda a, cwd: subprocess.run(a, cwd=cwd, capture_output=True, text=True, check=False))
     merged = []
-    rows = conn.execute(
-        "select key, stage from ticket where stage in ('qa_approved', 'merged') and removed_at is null").fetchall()
-    for row in rows:
+    for row in _board.keys_in_stages(conn, ("qa_approved", "merged")):
         key = row["key"]
         verdict = merge_bot.assess(conn, key, repo=repo, runner=run, status=status)
         if not verdict.ok:
             continue
-        url = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'pr' "
-                           "order by id desc limit 1", (key,)).fetchone()[0]
+        url = _board.last_event_detail(conn, key, "pr")
         from wf import forge as _forge
         f = _forge.for_url(url)
         merged_ok = (f.merge_pr(url) if isinstance(f, _forge.GitLab) else
                      _forge.GitHub(runner=lambda argv, cwd: run(argv, cwd)).merge_pr(url))
         if not merged_ok:
             continue
-        with conn:
-            conn.execute("insert into ticket_event (ticket_key, at, actor, kind, from_value, to_value, detail) "
-                         "values (?, strftime('%s','now'), 'merge_bot', 'pr_merged', null, null, ?)", (key, url))
+        _board.record_event(conn, key, "merge_bot", "pr_merged", url)
         if row["stage"] == "qa_approved":
             _board.move_stage(conn, key, "merged", "harness", f"PR merged into GitHub main: {url}")
         merged.append(key)

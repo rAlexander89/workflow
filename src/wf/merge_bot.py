@@ -52,17 +52,15 @@ def assess(conn: sqlite3.Connection, key: str, *, repo: Path, runner: Runner | N
     get = status or github_status.pr_status
     reasons: list[str] = []
 
-    row = conn.execute("select flags, stage from ticket where key = ?", (key,)).fetchone()
+    row = board.get_ticket(conn, key)
     if row is None:
         return Verdict(False, [f"no ticket {key}"])
-    if row["flags"] not in (None, "[]"):
+    if row.flags:
         reasons.append("the ticket is flagged; a person has to clear it")
 
-    pr = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'pr' "
-                      "order by id desc limit 1", (key,)).fetchone()
-    if pr is None:
+    url = board.last_event_detail(conn, key, "pr")
+    if url is None:
         return Verdict(False, reasons + ["there is no GitHub PR for this ticket yet"])
-    url = pr[0]
 
     st = get(url)
     if not st.get("ok"):

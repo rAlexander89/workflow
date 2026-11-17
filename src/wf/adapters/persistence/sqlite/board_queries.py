@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from wf.domain.board import stages as mapping
@@ -74,6 +75,70 @@ def counts(conn: sqlite3.Connection) -> dict:
     }
 
 
+def _pipeline(row: sqlite3.Row) -> dict:
+    return {"key": row["key"], "stage": row["stage"], "flags": json.loads(row["flags"] or "[]"),
+            "sort_order": row["sort_order"], "sprint_state": row["sprint_state"]}
+
+
+def pipeline_rows(conn: sqlite3.Connection) -> list[dict]:
+    return [_pipeline(r) for r in conn.execute(
+        """select t.key, t.stage, t.flags, t.sort_order, s.state as sprint_state
+             from ticket t left join sprint s on s.id = t.sprint_id
+            where t.removed_at is null and t.stage is not null""").fetchall()]
+
+
+def pipeline_row(conn: sqlite3.Connection, key: str) -> dict | None:
+    row = conn.execute(
+        "select t.key, t.stage, t.flags, t.sort_order, s.state as sprint_state from ticket t "
+        "left join sprint s on s.id = t.sprint_id where t.key = ? and t.removed_at is null", (key,)).fetchone()
+    return None if row is None else _pipeline(row)
+
+
+def sprint_backlog_keys(conn: sqlite3.Connection) -> list[str]:
+    return [r["key"] for r in conn.execute(
+        "select t.key from ticket t join sprint s on s.id = t.sprint_id "
+        "where t.stage = 'backlog' and s.state = 'active' and t.removed_at is null order by t.key").fetchall()]
+
+
+def kicked_back_dependents(conn: sqlite3.Connection, stages: tuple[str, ...]) -> list[dict]:
+    marks = ", ".join("?" for _ in stages)
+    return [dict(r) for r in conn.execute(
+        "select distinct t.key, b.key as blocker from ticket t "
+        "join sprint s on s.id = t.sprint_id "
+        "join ticket_link l on l.ticket_key = t.key and l.link_type = 'is blocked by' "
+        "join ticket b on b.key = l.other_key "
+        f"where s.state = 'active' and t.removed_at is null and t.stage in ({marks}) "
+        "and b.stage = 'in_dev' order by t.key", stages).fetchall()]
+
+
+def keys_in_stages(conn: sqlite3.Connection, stages: tuple[str, ...]) -> list[dict]:
+    marks = ", ".join("?" for _ in stages)
+    return [dict(r) for r in conn.execute(
+        f"select key, stage from ticket where stage in ({marks}) and removed_at is null", stages).fetchall()]
+
+
+def stage_by_key(conn: sqlite3.Connection) -> dict[str, str]:
+    return {r["key"]: r["stage"] for r in conn.execute("select key, stage from ticket where removed_at is null")}
+
+
+def qa_approved_without_pr(conn: sqlite3.Connection) -> list[str]:
+    return [r["key"] for r in conn.execute(
+        "select key from ticket where stage = 'qa_approved' and removed_at is null "
+        "and key not in (select ticket_key from ticket_event where kind = 'pr')").fetchall()]
+
+
+def ready_candidates(conn: sqlite3.Connection, stage: str) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        """select t.*, s.name as sprint_name, s.state as sprint_state
+             from ticket t left join sprint s on s.id = t.sprint_id
+            where t.stage = ? and t.removed_at is null
+            order by t.key""", (stage,)).fetchall()]
+
+
+def database_path(conn: sqlite3.Connection) -> str:
+    return str(conn.execute("pragma database_list").fetchone()[2])
+
+
 class SqliteBoardQueries:
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
@@ -101,3 +166,30 @@ class SqliteBoardQueries:
 
     def counts(self) -> dict:
         return counts(self._conn)
+
+    def pipeline_rows(self) -> list[dict]:
+        return pipeline_rows(self._conn)
+
+    def pipeline_row(self, key: str) -> dict | None:
+        return pipeline_row(self._conn, key)
+
+    def sprint_backlog_keys(self) -> list[str]:
+        return sprint_backlog_keys(self._conn)
+
+    def kicked_back_dependents(self, stages: tuple[str, ...]) -> list[dict]:
+        return kicked_back_dependents(self._conn, stages)
+
+    def keys_in_stages(self, stages: tuple[str, ...]) -> list[dict]:
+        return keys_in_stages(self._conn, stages)
+
+    def stage_by_key(self) -> dict[str, str]:
+        return stage_by_key(self._conn)
+
+    def qa_approved_without_pr(self) -> list[str]:
+        return qa_approved_without_pr(self._conn)
+
+    def ready_candidates(self, stage: str) -> list[dict]:
+        return ready_candidates(self._conn, stage)
+
+    def database_path(self) -> str:
+        return database_path(self._conn)

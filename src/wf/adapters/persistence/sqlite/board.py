@@ -15,12 +15,13 @@ class SqliteTicketRepository:
 
     def get(self, key: str) -> Ticket | None:
         row = self._conn.execute(
-            "select key, project_key, stage, flags, removed_at, sort_order, jira_status from ticket where key = ?",
+            "select key, project_key, stage, flags, removed_at, sort_order, jira_status, summary "
+            "from ticket where key = ?",
             (key,)).fetchone()
         if row is None:
             return None
         return Ticket(row["key"], row["project_key"], row["stage"], json.loads(row["flags"] or "[]"),
-                      row["removed_at"] is not None, row["sort_order"], row["jira_status"])
+                      row["removed_at"] is not None, row["sort_order"], row["jira_status"], row["summary"])
 
     def save(self, ticket: Ticket) -> None:
         self._conn.execute("update ticket set stage = ?, flags = ?, sort_order = ? where key = ?",
@@ -43,6 +44,22 @@ class SqliteTicketRepository:
             "insert into ticket_comment (ticket_key, origin, author, body, created_at) values (?, ?, ?, ?, ?)",
             (key, origin, author, body, at))
         return cur.lastrowid
+
+    def last_event_detail(self, key: str, kind: str) -> str | None:
+        row = self._conn.execute(
+            "select detail from ticket_event where ticket_key = ? and kind = ? order by id desc limit 1",
+            (key, kind)).fetchone()
+        return None if row is None else row[0]
+
+    def event_details(self, key: str, kind: str) -> list[str]:
+        return [r[0] for r in self._conn.execute(
+            "select detail from ticket_event where ticket_key = ? and kind = ? order by id desc", (key, kind))]
+
+    def append_event(self, event: TicketEvent) -> None:
+        self._conn.execute(
+            "insert into ticket_event (ticket_key, at, actor, kind, from_value, to_value, detail) "
+            "values (?, ?, ?, ?, ?, ?, ?)",
+            (event.ticket_key, event.at, event.actor, event.kind, event.from_value, event.to_value, event.detail))
 
     def link_blocks(self, prerequisite: str, dependent: str) -> None:
         self._conn.execute(

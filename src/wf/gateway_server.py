@@ -242,7 +242,7 @@ class Gateway:
         conn = board.connect(self.scope.db)
         try:
             board.record_approval(conn, self.scope.key, self.scope.role, head)
-            stage = conn.execute("select stage from ticket where key = ?", (self.scope.key,)).fetchone()["stage"]
+            stage = board.get_ticket(conn, self.scope.key).stage
             if self.scope.role == "pr_review" and stage in ("pr_open", "pr_in_review"):
                 board.move_stage(conn, self.scope.key, "ready_for_perf_review", self.scope.role,
                                  f"PR review approved at {head[:8]}")

@@ -53,6 +53,7 @@ class Ticket:
     removed: bool = False
     sort_order: int | None = None
     jira_status: str = ""
+    summary: str = ""
     events: list[TicketEvent] = field(default_factory=list)  # recorded since it was loaded, not yet saved
 
     def _record(self, at: int, actor: str, kind: str, from_value=None, to_value=None, detail=None) -> TicketEvent:

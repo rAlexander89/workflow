@@ -17,6 +17,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
+from wf import board
+
 DEV_WORKFLOW = "Build and Deploy"
 PROD_WORKFLOW = "Deploy to prod"
 
@@ -29,33 +31,26 @@ def _run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess:
 
 def _record(conn: sqlite3.Connection, key: str, text: str) -> None:
     """Write an observation once. Repeating the same reading on every tick adds nothing."""
-    last = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'observe' "
-                        "order by id desc limit 1", (key,)).fetchone()
-    if last and last[0] == text:
+    if board.last_event_detail(conn, key, "observe") == text:
         return
-    with conn:
-        conn.execute("insert into ticket_event (ticket_key, at, actor, kind, from_value, to_value, detail) "
-                     "values (?, strftime('%s','now'), 'observer', 'observe', null, null, ?)", (key, text))
+    board.record_event(conn, key, "observer", "observe", text)
 
 
 def latest(conn: sqlite3.Connection, key: str, prefix: str) -> str | None:
     """The most recent observation whose text starts with prefix, e.g. 'dev:'."""
-    rows = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'observe' "
-                        "order by id desc", (key,)).fetchall()
-    for r in rows:
-        if r[0] and r[0].startswith(prefix):
-            return r[0]
+    for detail in board.event_details(conn, key, "observe"):
+        if detail and detail.startswith(prefix):
+            return detail
     return None
 
 
 def merge_sha(conn: sqlite3.Connection, key: str, repo_slug: str, runner: Runner = _run, forge=None) -> str | None:
     """Observe the merge: the commit on main that the PR's merge produced."""
     from wf import forge as _forge
-    pr = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'pr' "
-                      "order by id desc limit 1", (key,)).fetchone()
+    pr = board.last_event_detail(conn, key, "pr")
     if pr is None:
         return None
-    st = _forge.for_url(pr[0], runner=runner).pr_status(pr[0])
+    st = _forge.for_url(pr, runner=runner).pr_status(pr)
     sha = st.get("merge_sha") if st.get("ok") else None
     if sha:
         _record(conn, key, f"merge:{sha}")
@@ -158,17 +153,12 @@ def failure_report(repo_slug: str, sha: str, workflow: str | None, runner: Runne
 def record_failure(conn: sqlite3.Connection, key: str, report: list[dict]) -> None:
     """Keep the failure report on the ticket, once per distinct report."""
     text = json.dumps(report, sort_keys=True)
-    last = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'failure' "
-                        "order by id desc limit 1", (key,)).fetchone()
-    if last and last[0] == text:
+    if board.last_event_detail(conn, key, "failure") == text:
         return
-    with conn:
-        conn.execute("insert into ticket_event (ticket_key, at, actor, kind, from_value, to_value, detail) "
-                     "values (?, strftime('%s','now'), 'observer', 'failure', null, null, ?)", (key, text))
+    board.record_event(conn, key, "observer", "failure", text)
 
 
 def failures(conn: sqlite3.Connection, key: str) -> list[dict]:
     """The latest failure report for the ticket, as a list of {step, job, url, reasons}."""
-    row = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'failure' "
-                       "order by id desc limit 1", (key,)).fetchone()
-    return json.loads(row[0]) if row else []
+    detail = board.last_event_detail(conn, key, "failure")
+    return json.loads(detail) if detail else []

@@ -26,6 +26,18 @@ class TicketRepository(Protocol):
         """Store a comment and return its id."""
         ...
 
+    def last_event_detail(self, key: str, kind: str) -> str | None:
+        """The detail of the ticket's newest event of this kind, or None."""
+        ...
+
+    def event_details(self, key: str, kind: str) -> list[str]:
+        """The details of the ticket's events of this kind, newest first."""
+        ...
+
+    def append_event(self, event: TicketEvent) -> None:
+        """Record an event that is not a change to the ticket itself (an observation, a PR link)."""
+        ...
+
     def link_blocks(self, prerequisite: str, dependent: str) -> None:
         """Record that `prerequisite` blocks `dependent`. Not yet in Jira."""
         ...
@@ -117,4 +129,40 @@ class BoardQueries(Protocol):
 
     def counts(self) -> dict:
         """active_tickets, backlog_tickets, flagged, and unmapped_stages."""
+        ...
+
+    def pipeline_rows(self) -> list[dict]:
+        """In-scope tickets with a stage: key, stage, flags (list), sort_order, sprint_state."""
+        ...
+
+    def pipeline_row(self, key: str) -> dict | None:
+        """One in-scope ticket: key, stage (may be None), flags (list), sort_order, sprint_state."""
+        ...
+
+    def sprint_backlog_keys(self) -> list[str]:
+        """In-scope tickets in the backlog stage of an active sprint, sorted."""
+        ...
+
+    def kicked_back_dependents(self, stages: tuple[str, ...]) -> list[dict]:
+        """Tickets (key, blocker) in these stages of an active sprint whose prerequisite is back in dev."""
+        ...
+
+    def keys_in_stages(self, stages: tuple[str, ...]) -> list[dict]:
+        """In-scope tickets (key, stage) in any of these stages."""
+        ...
+
+    def stage_by_key(self) -> dict[str, str]:
+        """The stage of every in-scope ticket that has one."""
+        ...
+
+    def qa_approved_without_pr(self) -> list[str]:
+        """In-scope qa_approved tickets with no recorded pull request."""
+        ...
+
+    def ready_candidates(self, stage: str) -> list[dict]:
+        """In-scope tickets in this stage, with sprint_name and sprint_state, sorted by key."""
+        ...
+
+    def database_path(self) -> str:
+        """Where the board's database file is, for processes started on the board's behalf."""
         ...

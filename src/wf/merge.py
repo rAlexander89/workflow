@@ -24,11 +24,11 @@ class MergeBlocked(board.BoardError):
 
 def check(conn: sqlite3.Connection, key: str, worktree: Path, test_cmd: str) -> str:
     """Return the head commit if the ticket may merge; raise MergeBlocked otherwise."""
-    row = conn.execute("select stage from ticket where key = ?", (key,)).fetchone()
+    row = board.get_ticket(conn, key)
     if row is None:
         raise MergeBlocked(f"no ticket {key}")
-    if row["stage"] != "qa_approved":
-        raise MergeBlocked(f"{key} is in {row['stage']}, not qa_approved")
+    if row.stage != "qa_approved":
+        raise MergeBlocked(f"{key} is in {row.stage}, not qa_approved")
     head = agents.head_of(worktree)
     missing = missing_approvals(board.approvals_at(conn, key, head))
     if missing:
@@ -66,8 +66,7 @@ def local_merge_when_clear(conn: sqlite3.Connection, *, repo: Path, runs_dir: Pa
     from wf import observe
 
     merged = []
-    rows = conn.execute("select key from ticket where stage = 'qa_approved' and removed_at is null").fetchall()
-    for row in rows:
+    for row in board.keys_in_stages(conn, ("qa_approved",)):
         key = row["key"]
         try:
             head = merge(conn, key, repo=repo, runs_dir=runs_dir, test_cmd=test_cmd)

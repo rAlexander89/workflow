@@ -181,8 +181,8 @@ def run_agent(
     regression_url: str = "",
 ) -> AgentResult:
     ensure_schema(conn)
-    stage_now = conn.execute("select stage from ticket where key = ?", (key,)).fetchone()
-    on_dev = bool(regression_url) and stage_now is not None and stage_now[0] == "regression"
+    stage_now = board.get_ticket(conn, key)
+    on_dev = bool(regression_url) and stage_now is not None and stage_now.stage == "regression"
     if on_dev:
         app_url = regression_url  # the final regression runs against the deployed dev app
     bot_email = f"{role}@{bot_domain}" if bot_domain else ""
@@ -200,7 +200,7 @@ def run_agent(
             return AgentResult(key, stage, role, None)
     run_dir = runs_dir / "runs" / key / f"{role}-{int(clock())}"
     env = {
-        "WF_ROLE": role, "WF_KEY": key, "WF_DB": str(conn.execute("pragma database_list").fetchone()[2]),
+        "WF_ROLE": role, "WF_KEY": key, "WF_DB": board.database_path(conn),
         "WF_WORKTREE": str(worktree), "WF_TEST_CMD": test_cmd, "WF_APP_CMD": app_cmd, "WF_APP_URL": app_url,
     }
     gateway = [sys.executable, "-m", "wf.gateway_server"]
@@ -257,10 +257,6 @@ def prod_ready(conn: sqlite3.Connection, key: str, repo: Path) -> bool:
     return True
 
 
-def _sql_list(values) -> str:
-    return "(" + ", ".join(f"'{v}'" for v in values) + ")"
-
-
 def unmet_blockers(conn: sqlite3.Connection, key: str, stage_of: dict[str, str]) -> list[str]:
     """Prerequisites of this ticket that are not on dev yet."""
     return roles.unmet_blockers(board.blockers(conn, key), stage_of)
@@ -285,20 +281,12 @@ def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, dev_deployed=None)
 
     # A sprint ticket goes into refinement (product and staff agree the work) before a dev takes it.
     moved: list[str] = []
-    for row in conn.execute(
-            "select t.key from ticket t join sprint s on s.id = t.sprint_id "
-            "where t.stage = 'backlog' and s.state = 'active' and t.removed_at is null order by t.key").fetchall():
-        board.move_stage(conn, row["key"], "in_refinement", "harness", "in the active sprint: refine it")
-        moved.append(row["key"])
+    for key in board.sprint_backlog_keys(conn):
+        board.move_stage(conn, key, "in_refinement", "harness", "in the active sprint: refine it")
+        moved.append(key)
 
     # A prerequisite sent back to dev pauses the work that depends on it.
-    for row in conn.execute(
-            "select distinct t.key, b.key as blocker from ticket t "
-            "join sprint s on s.id = t.sprint_id "
-            "join ticket_link l on l.ticket_key = t.key and l.link_type = 'is blocked by' "
-            "join ticket b on b.key = l.other_key "
-            f"where s.state = 'active' and t.removed_at is null and t.stage in {_sql_list(PAUSABLE)} "
-            "and b.stage = 'in_dev' order by t.key").fetchall():
+    for row in board.kicked_back_dependents(conn, PAUSABLE):
         board.move_stage(conn, row["key"], "ready_for_dev", "harness",
                          f"paused: prerequisite {row['blocker']} was sent back to dev")
         moved.append(row["key"])
@@ -306,9 +294,7 @@ def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, dev_deployed=None)
     if dev_deployed is None:
         dev_deployed = lambda key: observe.dev_deployed(conn, key)  # noqa: E731
     ensure_schema(conn)
-    rows = conn.execute(
-        "select key, stage from ticket where stage in ('pr_open', 'pr_in_review', 'merged', 'regression', 'performance') "
-        "and removed_at is null").fetchall()
+    rows = board.keys_in_stages(conn, ("pr_open", "pr_in_review", "merged", "regression", "performance"))
     for row in rows:
         key, stage = row["key"], row["stage"]
         if stage == "merged":
@@ -363,14 +349,11 @@ def idle_reason(conn: sqlite3.Connection, key: str) -> dict | None:
     """
     from wf import pause
 
-    ensure_schema(conn)
-    row = conn.execute(
-        "select t.stage, t.flags, s.state as sprint_state from ticket t "
-        "left join sprint s on s.id = t.sprint_id where t.key = ? and t.removed_at is null", (key,)).fetchone()
+    row = board.pipeline_row(conn, key)
     if row is None or row["stage"] is None:
         return None
     stage = row["stage"]
-    flags = json.loads(row["flags"] or "[]")
+    flags = row["flags"]
     role = refinement_role(conn, key) if stage in REFINEMENT_STAGES else STAGE_ROLE.get(stage)
 
     if pause.is_paused(conn):
@@ -389,8 +372,7 @@ def idle_reason(conn: sqlite3.Connection, key: str) -> dict | None:
         return {"why": f"{MAX_RUNS_PER_STAGE} runs in a row failed here. A person has to look at the last run.",
                 "can_run": True}
     elif stage == "ready_for_dev":
-        stage_of = {r["key"]: r["stage"] for r in conn.execute("select key, stage from ticket where removed_at is null")}
-        waiting = unmet_blockers(conn, key, stage_of)
+        waiting = unmet_blockers(conn, key, board.stage_by_key(conn))
         if waiting:
             return {"why": f"Waiting for {', '.join(waiting)} to reach dev first.", "can_run": False}
     elif stage not in REFINEMENT_STAGES and _finished_and_unchanged(conn, key, stage):
@@ -419,11 +401,7 @@ def tick(
     if pause.is_paused(conn):
         return []
     ensure_schema(conn)
-    rows = conn.execute(
-        """select t.key, t.stage, t.flags, t.sort_order, s.state as sprint_state
-             from ticket t left join sprint s on s.id = t.sprint_id
-            where t.removed_at is null and t.stage is not null"""
-    ).fetchall()
+    rows = board.pipeline_rows(conn)
     stage_of = {r["key"]: r["stage"] for r in rows}
     dev_busy = next((r["key"] for r in rows if r["stage"] == "in_dev" and r["sprint_state"] == "active"), None)
     order = sorted(rows, key=lambda r: (r["stage"] != "in_dev", r["sort_order"] is None,
@@ -434,7 +412,7 @@ def tick(
         role = STAGE_ROLE.get(stage)
         if stage in REFINEMENT_STAGES:
             role = refinement_role(conn, key)  # refinement alternates; the round limit below ends it
-        if role is None or row["sprint_state"] != "active" or json.loads(row["flags"] or "[]"):
+        if role is None or row["sprint_state"] != "active" or row["flags"]:
             continue
         if stage not in REFINEMENT_STAGES and _finished_and_unchanged(conn, key, stage):
             continue  # the last run here succeeded and nothing has changed since: wait for a change
