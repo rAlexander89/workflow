@@ -252,13 +252,12 @@ def test_merged_goes_to_regression_only_after_the_github_merge(conn, repo, tmp_p
     assert ticket_row(conn, "ABC-1")["stage"] == "regression"
 
 
-def test_regression_pass_waits_for_a_person_to_deploy(conn, repo, tmp_path):
+def test_regression_pass_moves_to_deployed_on_dev(conn, repo, tmp_path):
     wt = _branch_with_change(repo, tmp_path)
     _set_stage(conn, "regression")
     board.record_approval(conn, "ABC-1", "qa", agents.head_of(wt), clock=clock)
     agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: True)
-    assert ticket_row(conn, "ABC-1")["stage"] == "regression"
-    assert agents.prod_ready(conn, "ABC-1", repo)
+    assert ticket_row(conn, "ABC-1")["stage"] == "deployed"
 
 
 def test_regression_pass_goes_to_performance_when_the_dev_asked(conn, repo, tmp_path):
@@ -363,3 +362,11 @@ def test_the_regression_brief_says_earlier_approvals_do_not_count(conn):
     _set_stage(conn, "regression")
     detail = board.ticket_detail(conn, "ABC-1")
     assert "Approvals from earlier stages do not count here" in agents.brief(detail)
+
+
+def test_a_regression_pass_without_a_perf_request_goes_to_deployed(conn, repo, tmp_path):
+    wt = _branch_with_change(repo, tmp_path)
+    _set_stage(conn, "regression")
+    board.record_approval(conn, "ABC-1", "qa", agents.head_of(wt))
+    agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: True)
+    assert ticket_row(conn, "ABC-1")["stage"] == "deployed"

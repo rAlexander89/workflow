@@ -252,7 +252,7 @@ def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, dev_deployed=None)
     ensure_schema(conn)
     moved: list[str] = []
     rows = conn.execute(
-        "select key, stage from ticket where stage in ('pr_open', 'pr_in_review', 'merged', 'regression') "
+        "select key, stage from ticket where stage in ('pr_open', 'pr_in_review', 'merged', 'regression', 'performance') "
         "and removed_at is null").fetchall()
     for row in rows:
         key, stage = row["key"], row["stage"]
@@ -261,13 +261,21 @@ def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, dev_deployed=None)
                 board.move_stage(conn, key, "regression", "harness", "deployed to dev; regression on dev")
                 moved.append(key)
             continue
-        if stage == "regression":
-            if board.perf_requested(conn, key):
-                proc = subprocess.run(["git", "rev-parse", "--verify", "--quiet", branch_for(key)], cwd=repo,
-                                      capture_output=True, text=True)
-                if proc.returncode == 0 and "qa" in board.approvals_since_stage(conn, key, proc.stdout.strip(), "regression"):
+        if stage in ("regression", "performance"):
+            proc = subprocess.run(["git", "rev-parse", "--verify", "--quiet", branch_for(key)], cwd=repo,
+                                  capture_output=True, text=True)
+            if proc.returncode != 0:
+                continue
+            head = proc.stdout.strip()
+            if stage == "regression" and "qa" in board.approvals_since_stage(conn, key, head, "regression"):
+                if board.perf_requested(conn, key):
                     board.move_stage(conn, key, "performance", "harness", "regression passed; performance requested")
-                    moved.append(key)
+                else:
+                    board.move_stage(conn, key, "deployed", "harness", f"regression passed at {head[:8]}; deployed to dev")
+                moved.append(key)
+            elif stage == "performance" and "performance" in board.approvals_since_stage(conn, key, head, "performance"):
+                board.move_stage(conn, key, "deployed", "harness", f"performance passed at {head[:8]}")
+                moved.append(key)
             continue
         proc = subprocess.run(["git", "rev-parse", "--verify", "--quiet", branch_for(key)], cwd=repo,
                               capture_output=True, text=True)
