@@ -127,13 +127,19 @@ def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: boo
 
 IN_PROGRESS_STAGES = {"backlog", "needs_refinement", "in_refinement", "hotfix_review", "ready_for_dev", "in_dev",
                       "pr_open", "pr_in_review", "ready_for_perf_review", "ready_for_qa", "qa_approved"}
-DEVELOPMENT_STAGES = {"merged", "regression", "performance", "deployed"}
+DEVELOPMENT_STAGES = {"merged", "regression", "performance"}
 
 
 def stage_marker(stage: str | None) -> tuple[str, str]:
-    """The single status marker for a ticket: (label, css class)."""
+    """The single status marker for a ticket: (label, css class).
+
+    Done is the end of the individual flow: deployed to dev and checked. Deployed to Prod is set by
+    the sprint-level release flow, not by the ticket.
+    """
+    if stage == "released":
+        return "Deployed to Prod", "prod"
+    if stage == "deployed":
+        return "Done", "done"
     if stage in DEVELOPMENT_STAGES:
         return "Stage: Development", "dev"
-    if stage == "released":
-        return "Stage: Production", "prod"
     return "Stage: In Progress", "wip"

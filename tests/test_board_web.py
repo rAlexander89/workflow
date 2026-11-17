@@ -150,3 +150,11 @@ def test_only_one_step_is_in_progress_at_a_time():
                                  pr_checks="pending", flagged=False)
             current = [f["key"] for f in flow if f["state"] == "current"]
             assert len(current) <= 1, (stage, pr, current)
+
+
+def test_the_stage_marker_ends_at_done_and_prod_is_the_release():
+    from wf.web import pipeline as p
+    assert p.stage_marker("in_dev")[0] == "Stage: In Progress"
+    assert p.stage_marker("regression")[0] == "Stage: Development"
+    assert p.stage_marker("deployed")[0] == "Done"
+    assert p.stage_marker("released")[0] == "Deployed to Prod"
