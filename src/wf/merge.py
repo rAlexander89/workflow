@@ -14,8 +14,8 @@ import subprocess
 from pathlib import Path
 
 from wf import agents, board
+from wf.domain.delivery.roles import REQUIRED_APPROVALS, missing_approvals  # noqa: F401
 
-REQUIRED_APPROVALS = {"pr_review", "perf_review", "qa"}
 
 
 class MergeBlocked(board.BoardError):
@@ -30,7 +30,7 @@ def check(conn: sqlite3.Connection, key: str, worktree: Path, test_cmd: str) -> 
     if row["stage"] != "qa_approved":
         raise MergeBlocked(f"{key} is in {row['stage']}, not qa_approved")
     head = agents.head_of(worktree)
-    missing = REQUIRED_APPROVALS - board.approvals_at(conn, key, head)
+    missing = missing_approvals(board.approvals_at(conn, key, head))
     if missing:
         raise MergeBlocked(f"{key} at {head[:8]} is missing approval from {', '.join(sorted(missing))}")
     if not test_cmd:

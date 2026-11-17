@@ -23,30 +23,13 @@ from pathlib import Path
 from typing import Callable
 
 from wf import board, claude_run
+from wf.domain.delivery import roles
+from wf.domain.delivery.roles import (  # noqa: F401
+    DONE_FOR_BLOCKING, MAX_REFINEMENT_ROUNDS, MAX_RUNS_PER_STAGE, PAUSABLE, REFINEMENT_STAGES, STAGE_ROLE,
+    missing_approvals, next_refinement_role, refinement_limit_reached, run_limit_reached,
+)
 
 PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
-MAX_RUNS_PER_STAGE = 3  # loop guard: a ticket that bounces this often needs a human
-
-# Which role runs in each stage. Stages not listed have no agent.
-STAGE_ROLE: dict[str, str] = {
-    "in_refinement": "product",  # product and staff take turns here: see refinement_role
-    "hotfix_review": "staff",
-    "ready_for_dev": "dev",
-    "in_dev": "dev",
-    "pr_open": "pr_review",
-    "pr_in_review": "pr_review",
-    "ready_for_perf_review": "perf_review",
-    "ready_for_qa": "qa",
-    "merged": None,  # the harness moves it on to regression
-    "regression": "qa",
-    "performance": "performance",
-}
-
-REFINEMENT_STAGES = ("in_refinement",)
-MAX_REFINEMENT_ROUNDS = 7  # product rounds without the staff bot's agreement: a person is asked
-DONE_FOR_BLOCKING = ("merged", "regression", "performance", "deployed")  # a prerequisite is on dev
-PAUSABLE = ("in_dev", "pr_open", "pr_in_review")  # dev-owned work a kicked-back prerequisite interrupts
-
 
 SCHEMA = """
 create table if not exists agent_run (
@@ -251,9 +234,7 @@ def refinement_role(conn: sqlite3.Connection, key: str) -> str:
     last = conn.execute(
         "select role from agent_run where key = ? and stage = 'in_refinement' order by id desc limit 1",
         (key,)).fetchone()
-    if last is None or last["role"] == "staff":
-        return "product"
-    return "staff"
+    return next_refinement_role(None if last is None else last["role"])
 
 
 def runs_at(conn: sqlite3.Connection, key: str, stage: str) -> int:
@@ -299,7 +280,7 @@ def _sql_list(values) -> str:
 
 def unmet_blockers(conn: sqlite3.Connection, key: str, stage_of: dict[str, str]) -> list[str]:
     """Prerequisites of this ticket that are not on dev yet."""
-    return [b for b in board.blockers(conn, key) if stage_of.get(b) not in DONE_FOR_BLOCKING]
+    return roles.unmet_blockers(board.blockers(conn, key), stage_of)
 
 
 def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, dev_deployed=None) -> list[str]:
@@ -424,9 +405,9 @@ def idle_reason(conn: sqlite3.Connection, key: str) -> dict | None:
         return {"why": "Not in an active sprint, so no agent picks it up.", "can_run": False}
     if stage in REFINEMENT_STAGES:
         rounds = conn.execute("select count(*) from agent_run where key = ? and role = 'product'", (key,)).fetchone()[0]
-        if rounds >= MAX_REFINEMENT_ROUNDS:
+        if refinement_limit_reached(rounds):
             return {"why": f"{rounds} refinement rounds without agreement. A person has to decide.", "can_run": True}
-    elif runs_at(conn, key, stage) >= MAX_RUNS_PER_STAGE:
+    elif run_limit_reached(runs_at(conn, key, stage)):
         return {"why": f"{MAX_RUNS_PER_STAGE} runs in a row failed here. A person has to look at the last run.",
                 "can_run": True}
     elif stage == "ready_for_dev":
@@ -483,13 +464,13 @@ def tick(
         if stage in REFINEMENT_STAGES:
             rounds = conn.execute("select count(*) from agent_run where key = ? and role = 'product'",
                                   (key,)).fetchone()[0]
-            if rounds >= MAX_REFINEMENT_ROUNDS:
+            if refinement_limit_reached(rounds):
                 action["skipped"] = f"{rounds} refinement rounds without agreement; needs a human"
                 if not dry_run:
                     board.set_flag(conn, key, "needs-human", "harness", action["skipped"], clock=clock)
                 actions.append(action)
                 continue
-        elif runs_at(conn, key, stage) >= MAX_RUNS_PER_STAGE:
+        elif run_limit_reached(runs_at(conn, key, stage)):
             action["skipped"] = "run limit reached for this stage; needs a human"
             actions.append(action)
             continue
