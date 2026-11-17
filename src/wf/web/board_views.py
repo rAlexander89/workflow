@@ -144,8 +144,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             _agents.ensure_schema(c)
             items = [dict(r) for r in c.execute(
                 "select * from outbox where ticket_key = ? and kind = 'transition' order by id", (key,)).fetchall()]
-            runs = [dict(r) for r in c.execute(
-                "select * from agent_run where key = ? order by id desc", (key,)).fetchall()]
+            runs = _agents.runs_for(c, key)
             for r in runs:
                 r["when"] = when(r["started_at"])
             events = [dict(e) for e in reversed(detail["events"])]

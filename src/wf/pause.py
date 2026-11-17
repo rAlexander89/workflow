@@ -14,15 +14,7 @@ import sqlite3
 import time
 from typing import Callable
 
-SCHEMA = """
-create table if not exists work_pause (
-    id         integer primary key check (id = 1),
-    paused     integer not null default 0,
-    paused_at  integer,
-    resumed_at integer,
-    reason     text
-);
-"""
+from wf.adapters.persistence.sqlite.pause import SCHEMA, SqlitePauseState  # noqa: F401
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
@@ -30,37 +22,19 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
 
 def is_paused(conn: sqlite3.Connection) -> bool:
-    ensure_schema(conn)
-    row = conn.execute("select paused from work_pause where id = 1").fetchone()
-    return bool(row) and bool(row[0])
+    return SqlitePauseState(conn).is_paused()
 
 
 def paused_since(conn: sqlite3.Connection) -> int | None:
-    ensure_schema(conn)
-    row = conn.execute("select paused_at from work_pause where id = 1 and paused = 1").fetchone()
-    return row[0] if row else None
+    return SqlitePauseState(conn).paused_since()
 
 
 def pause(conn: sqlite3.Connection, reason: str = "paused by a person",
           clock: Callable[[], float] = time.time) -> bool:
     """Turn the pause on. Returns False if work was already paused."""
-    ensure_schema(conn)
-    if is_paused(conn):
-        return False
-    now = int(clock())
-    conn.execute(
-        "insert into work_pause (id, paused, paused_at, reason) values (1, 1, ?, ?) "
-        "on conflict(id) do update set paused = 1, paused_at = excluded.paused_at, reason = excluded.reason",
-        (now, reason))
-    conn.commit()
-    return True
+    return SqlitePauseState(conn).pause(reason, int(clock()))
 
 
 def resume(conn: sqlite3.Connection, clock: Callable[[], float] = time.time) -> bool:
     """Turn the pause off. Returns False if work was not paused."""
-    ensure_schema(conn)
-    if not is_paused(conn):
-        return False
-    conn.execute("update work_pause set paused = 0, resumed_at = ?, reason = null where id = 1", (int(clock()),))
-    conn.commit()
-    return True
+    return SqlitePauseState(conn).resume(int(clock()))

@@ -31,23 +31,25 @@ from wf.domain.delivery.roles import (  # noqa: F401
 
 PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 
-SCHEMA = """
-create table if not exists agent_run (
-    id          integer primary key autoincrement,
-    key         text not null,
-    stage       text not null,
-    role        text not null,
-    started_at  integer not null,
-    exit_code   integer,
-    timed_out   integer not null default 0,
-    output_path text not null
-);
-create index if not exists agent_run_key on agent_run (key, stage);
-"""
+from wf.adapters.persistence.sqlite.agent_runs import SCHEMA, SqliteAgentRuns  # noqa: E402,F401
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+
+
+def _runs(conn: sqlite3.Connection) -> SqliteAgentRuns:
+    return SqliteAgentRuns(conn)
+
+
+def runs_for(conn: sqlite3.Connection, key: str) -> list[dict]:
+    """All agent runs on the ticket, newest first."""
+    return _runs(conn).runs_for(key)
+
+
+def last_exit_code(conn: sqlite3.Connection, key: str, role: str | None = None) -> int | None:
+    """The exit code of the newest run (of this role, if given), or None if none ran."""
+    return _runs(conn).last_exit_code(key, role)
 
 
 # --- git ----------------------------------------------------------------------------
@@ -215,12 +217,7 @@ def run_agent(
         run_dir=run_dir, profile=role, gateway_command=gateway, access=access, gateway_env=env,
         timeout=timeout, claude_bin=claude_bin, runner=runner,
     )
-    conn.execute(
-        "insert into agent_run (key, stage, role, started_at, exit_code, timed_out, output_path) "
-        "values (?, ?, ?, ?, ?, ?, ?)",
-        (key, stage, role, int(clock()), result.exit_code, int(result.timed_out), str(result.output_path)),
-    )
-    conn.commit()
+    _runs(conn).record(key, stage, role, int(clock()), result.exit_code, result.timed_out, str(result.output_path))
     return AgentResult(key, stage, role, result)
 
 
@@ -230,11 +227,7 @@ def refinement_role(conn: sqlite3.Connection, key: str) -> str:
     Staff moves the ticket out of refinement when the two agree. Until then each agent's
     run hands the turn to the other, and MAX_REFINEMENT_ROUNDS caps the product rounds.
     """
-    ensure_schema(conn)
-    last = conn.execute(
-        "select role from agent_run where key = ? and stage = 'in_refinement' order by id desc limit 1",
-        (key,)).fetchone()
-    return next_refinement_role(None if last is None else last["role"])
+    return next_refinement_role(_runs(conn).last_role_at(key, "in_refinement"))
 
 
 def runs_at(conn: sqlite3.Connection, key: str, stage: str) -> int:
@@ -243,17 +236,7 @@ def runs_at(conn: sqlite3.Connection, key: str, stage: str) -> int:
     A run that succeeds resets the count, so work keeps going while the agent is making
     progress. Only repeated failures count toward the stop: that is a real obstacle.
     """
-    ensure_schema(conn)
-    rows = conn.execute(
-        "select exit_code, timed_out from agent_run where key = ? and stage = ? order by id desc",
-        (key, stage)).fetchall()
-    streak = 0
-    for r in rows:
-        if r["timed_out"] or r["exit_code"] != 0:
-            streak += 1
-        else:
-            break
-    return streak
+    return _runs(conn).failed_in_a_row(key, stage)
 
 
 def prod_ready(conn: sqlite3.Connection, key: str, repo: Path) -> bool:
@@ -366,9 +349,7 @@ def _finished_and_unchanged(conn: sqlite3.Connection, key: str, stage: str) -> b
     An event by anyone other than that run's own role counts as a change, so a review that sends the
     ticket back to this stage makes the stage run again.
     """
-    last = conn.execute(
-        "select role, exit_code, timed_out, started_at from agent_run where key = ? and stage = ? "
-        "order by id desc limit 1", (key, stage)).fetchone()
+    last = _runs(conn).last_run(key, stage)
     if last is None or last["timed_out"] or last["exit_code"] != 0:
         return False
     changed = conn.execute(
@@ -404,7 +385,7 @@ def idle_reason(conn: sqlite3.Connection, key: str) -> dict | None:
     if row["sprint_state"] != "active":
         return {"why": "Not in an active sprint, so no agent picks it up.", "can_run": False}
     if stage in REFINEMENT_STAGES:
-        rounds = conn.execute("select count(*) from agent_run where key = ? and role = 'product'", (key,)).fetchone()[0]
+        rounds = _runs(conn).product_rounds(key)
         if refinement_limit_reached(rounds):
             return {"why": f"{rounds} refinement rounds without agreement. A person has to decide.", "can_run": True}
     elif run_limit_reached(runs_at(conn, key, stage)):
@@ -462,8 +443,7 @@ def tick(
             continue  # the last run here succeeded and nothing has changed since: wait for a change
         action = {"key": key, "stage": stage, "role": role, "skipped": None}
         if stage in REFINEMENT_STAGES:
-            rounds = conn.execute("select count(*) from agent_run where key = ? and role = 'product'",
-                                  (key,)).fetchone()[0]
+            rounds = _runs(conn).product_rounds(key)
             if refinement_limit_reached(rounds):
                 action["skipped"] = f"{rounds} refinement rounds without agreement; needs a human"
                 if not dry_run:

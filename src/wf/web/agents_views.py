@@ -128,8 +128,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             paused_text = time.strftime("%H:%M", time.localtime(paused_at)) if paused_at else ""
             by_stage: dict[str, list[dict]] = {}
             for r in rows:
-                last = conn.execute(
-                    "select exit_code from agent_run where key = ? order by id desc limit 1", (r["key"],)).fetchone()
+                last_code = agents.last_exit_code(conn, r["key"])
                 flags = json.loads(r["flags"] or "[]")
                 reason = conn.execute(
                     "select detail from ticket_event where ticket_key = ? and kind = 'flag' "
@@ -144,7 +143,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                     "can_merge": False,
                     "can_publish": r["stage"] == "deployed",
                     "can_deploy": r["stage"] in ("regression", "performance") and agents.prod_ready(conn, r["key"], _repo_path(c, None)),
-                    "last": {"exit_code": last["exit_code"]} if last else None,
+                    "last": {"exit_code": last_code} if last_code is not None else None,
                 })
         finally:
             conn.close()
@@ -679,9 +678,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             pr = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'pr' "
                               "order by id desc limit 1", (key,)).fetchone()
             approvals = sorted(board.approvals_at(conn, key, head))
-            tests = conn.execute(
-                "select exit_code from agent_run where key = ? and role = 'dev' order by id desc limit 1",
-                (key,)).fetchone()
+            tests = agents.last_exit_code(conn, key, "dev")
         finally:
             conn.close()
         summary = _html.escape(stat[-1]) if stat else "no changes against main"
@@ -706,7 +703,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
 <div class="item">Changes: {summary}</div>
 {verdict_html}
 <div class="item">Approved at this commit: {_html.escape(approved)}</div>
-<div class="item">Last dev run: {"ok" if tests and tests[0] == 0 else "not ok" if tests else "none"}</div>
+<div class="item">Last dev run: {"ok" if tests == 0 else "not ok" if tests is not None else "none"}</div>
 <div class="item"><a href="/board/ticket/{_html.escape(key)}/diff" target="_blank">View the diff</a></div>
 {('<div class="item">GitHub PR: <a href="' + _html.escape(pr[0]) + '" target="_blank">' + _html.escape(pr[0]) + '</a></div>') if pr else ''}</div>"""
         return HTMLResponse(body)
