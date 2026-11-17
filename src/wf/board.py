@@ -275,11 +275,21 @@ def _json(value: Any) -> str:
 
 
 def _stage_for(conn: sqlite3.Connection, project_key: str, status: str) -> str | None:
+    """The stage a ticket is in, from its Jira status.
+
+    The mapping keeps one status per stage (the one used to move a ticket there). A ticket can be
+    in any status whose name points to exactly one stage, so "Open" and "Backlog" are both "To do".
+    A status that points to several stages is left out, as before.
+    """
     row = conn.execute(
         "select stage from stage_mapping where project_key = ? and status_name = ?",
         (project_key, status),
     ).fetchone()
-    return row["stage"] if row else None
+    if row:
+        return row["stage"]
+    from wf import mapping
+    stages = mapping.stages_for(status)
+    return stages[0] if len(stages) == 1 else None
 
 
 def _apply_projects(conn: sqlite3.Connection, data: dict, now: int, result: SyncResult) -> None:

@@ -45,6 +45,11 @@
   </div>
 </div>
 
+{% if sent %}
+<p class="muted" id="sent-note" style="margin:0 0 14px">Sent to Jira. This page refreshes in a few seconds once Jira is read back.</p>
+<script>setTimeout(function () { window.location.replace("/board/backlog"); }, 10000);</script>
+{% endif %}
+
 <div class="hop" id="hopper" data-has-sprint="{{ 'yes' if active_sprint else 'no' }}">
   <div class="hop-head">
     <h2>Hopper (<span id="hopper-count">0</span>)</h2>

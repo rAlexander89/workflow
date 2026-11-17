@@ -445,7 +445,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
 
         if not _start(f"move {len(keys)} ticket(s) to sprint", work):
             _log("another action is already running")
-        return RedirectResponse("/board/backlog", status_code=303)
+        return RedirectResponse("/board/backlog?sent=1", status_code=303)
 
     @app.post("/board/item/{key}/to-sprint")
     def move_to_sprint(key: str):

@@ -482,3 +482,10 @@ def test_assignee_name_and_links_are_stored(conn):
     assert row["assignee_name"] == "Pat Tester"
     link = conn.execute("select * from ticket_link where ticket_key = 'ABC-7'").fetchone()
     assert (link["other_key"], link["link_type"], link["other_summary"]) == ("ABC-8", "blocks", "Next")
+
+
+def test_a_status_named_open_is_the_to_do_stage(conn):
+    from wf import board as _b
+    assert _b._stage_for(conn, "ABC", "Open") == "backlog"
+    assert _b._stage_for(conn, "ABC", "Backlog") == "backlog"
+    assert _b._stage_for(conn, "ABC", "PR open") == "pr_open"

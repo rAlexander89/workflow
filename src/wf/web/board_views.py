@@ -76,7 +76,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             c.close()
 
     @app.get("/board/backlog", response_class=HTMLResponse)
-    def backlog_page(request: Request):
+    def backlog_page(request: Request, sent: int = 0):
         from datetime import datetime
         from wf.web import pipeline as _pipeline
         c = conn()
@@ -91,7 +91,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
                 rows.append(t)
             rows.sort(key=lambda t: t.get("jira_updated") or 0, reverse=True)
             active = c.execute("select id, name from sprint where state = 'active' order by id limit 1").fetchone()
-            return page(request, "backlog.html", "backlog", tickets=rows,
+            return page(request, "backlog.html", "backlog", tickets=rows, sent=bool(sent),
                         active_sprint=dict(active) if active else None, sync=sync_line(c))
         finally:
             c.close()
