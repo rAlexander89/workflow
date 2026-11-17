@@ -29,8 +29,8 @@ from wf import board
 
 PROTOCOL = "2024-11-05"
 
-# Requests to a remote app carry this header. Cloudflare skips its browser checks for a request
-# that has the matching secret (see infra/cloudflare), so the bot can reach dev from this machine.
+# Requests to a remote app carry this header. An edge firewall can use it to let the runner through
+# its browser checks when the request carries the matching secret. The firewall is configured outside this tool.
 RUNNER_SECRET_HEADER = "X-Wf-Runner-Secret"
 
 

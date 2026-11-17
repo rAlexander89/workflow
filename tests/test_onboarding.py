@@ -86,7 +86,7 @@ def test_source_control_non_interactive_infers_the_forge():
     gh = onboarding.RepoCandidate(path="/x", name="a", remote="o/a", last_commit=0, my_commits=0,
                                   remote_url="git@github.com:o/a.git")
     gl = onboarding.RepoCandidate(path="/y", name="b", remote="g/b", last_commit=0, my_commits=0,
-                                  remote_url="git@gitlab.home.lan:g/b.git")
+                                  remote_url="git@git.example.com:g/b.git")
     local = onboarding.RepoCandidate(path="/z", name="c", remote="", last_commit=0, my_commits=0, remote_url="")
     assert cli._source_control(gh, interactive=False) == ("github", "", "o/a")
     assert cli._source_control(gl, interactive=False) == ("gitlab", "", "g/b")
@@ -95,7 +95,7 @@ def test_source_control_non_interactive_infers_the_forge():
 
 def test_source_control_interactive_asks_the_four_options(monkeypatch):
     from wf import cli, onboarding
-    answers = iter(["2", "gitlab.home.lan", "g/b"])
+    answers = iter(["2", "git.example.com", "g/b"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     c = onboarding.RepoCandidate(path="/y", name="b", remote="", last_commit=0, my_commits=0, remote_url="")
-    assert cli._source_control(c, interactive=True) == ("gitlab", "gitlab.home.lan", "g/b")
+    assert cli._source_control(c, interactive=True) == ("gitlab", "git.example.com", "g/b")
