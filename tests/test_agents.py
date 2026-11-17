@@ -346,3 +346,20 @@ def test_a_local_repo_merges_on_its_own_and_counts_as_dev(conn, repo, tmp_path):
     assert ticket_row(conn, "ABC-1")["stage"] == "merged"
     assert observe.dev_deployed(conn, "ABC-1")
     assert (repo / "app.txt").read_text() == "v2\n"
+
+
+def test_a_finished_stage_is_not_run_again_until_something_changes(conn, repo, tmp_path):
+    _set_stage(conn, "regression")
+    conn.execute("insert into agent_run (key, stage, role, started_at, exit_code, timed_out, output_path) "
+                 "values ('ABC-1','regression','qa',1000,0,0,'x')")
+    conn.commit()
+    assert agents._finished_and_unchanged(conn, "ABC-1", "regression")
+    conn.execute("insert into ticket_event (ticket_key, at, actor, kind) values ('ABC-1', 2000, 'user', 'comment')")
+    conn.commit()
+    assert not agents._finished_and_unchanged(conn, "ABC-1", "regression")
+
+
+def test_the_regression_brief_says_earlier_approvals_do_not_count(conn):
+    _set_stage(conn, "regression")
+    detail = board.ticket_detail(conn, "ABC-1")
+    assert "Approvals from earlier stages do not count here" in agents.brief(detail)

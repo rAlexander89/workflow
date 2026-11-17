@@ -114,6 +114,13 @@ class AgentResult:
     run: claude_run.RunResult | None
 
 
+STAGE_NOTES = {
+    "regression": ("This is the regression stage on dev. Run the regression against the dev app. "
+                   "Approvals from earlier stages do not count here. If the regression passes, "
+                   "call approve_ticket to record it. If it fails, flag_ticket with what failed."),
+}
+
+
 def brief(detail: dict) -> str:
     t = detail["ticket"]
     lines = [
@@ -123,6 +130,8 @@ def brief(detail: dict) -> str:
         "Description:",
         t.get("description") or "(none)",
     ]
+    if t.get("stage") in STAGE_NOTES:
+        lines += ["", STAGE_NOTES[t["stage"]]]
     if t.get("acceptance"):
         lines += ["", "Acceptance criteria:", t["acceptance"]]
     comments = [c for c in detail.get("comments", []) if c.get("body")]
@@ -271,6 +280,20 @@ def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, dev_deployed=None)
     return moved
 
 
+def _finished_and_unchanged(conn: sqlite3.Connection, key: str, stage: str) -> bool:
+    """True when the last run in this stage succeeded and no person or system event came after it."""
+    last = conn.execute(
+        "select exit_code, timed_out, started_at from agent_run where key = ? and stage = ? "
+        "order by id desc limit 1", (key, stage)).fetchone()
+    if last is None or last["timed_out"] or last["exit_code"] != 0:
+        return False
+    changed = conn.execute(
+        "select 1 from ticket_event where ticket_key = ? and at > ? and actor not in "
+        "('pr_review','perf_review','qa','dev','performance','product','staff','pr_review') limit 1",
+        (key, last["started_at"])).fetchone()
+    return changed is None
+
+
 def tick(
     conn: sqlite3.Connection, *, repo: Path, runs_dir: Path, access: bool, model: str,
     test_cmd: str = "", app_cmd: str = "", app_url: str = "", bot_domain: str = "", bot_credentials: str = "",
@@ -296,6 +319,8 @@ def tick(
         role = STAGE_ROLE.get(row["stage"])
         if role is None or row["sprint_state"] != "active" or json.loads(row["flags"] or "[]"):
             continue
+        if _finished_and_unchanged(conn, row["key"], row["stage"]):
+            continue  # the last run here succeeded and nothing has changed since: wait for a change
         if runs_at(conn, row["key"], row["stage"]) >= MAX_RUNS_PER_STAGE:
             actions.append({"key": row["key"], "stage": row["stage"], "role": role,
                             "skipped": "run limit reached for this stage; needs a human"})
