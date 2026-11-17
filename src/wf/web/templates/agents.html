@@ -36,13 +36,12 @@
   </div>
 </div>
 
-<div class="pipe" hx-get="/agents/state" hx-trigger="every 4s" hx-swap="none"></div>
-<div id="board" hx-get="/agents/board" hx-trigger="every 4s" hx-swap="innerHTML">
+<div id="board">
   {% include "_board.html" %}
 </div>
 
 <h2>Activity</h2>
-<div class="panel" hx-get="/agents/state" hx-trigger="every 4s" hx-target="this" hx-swap="innerHTML">
+<div class="panel" id="activity">
   {% include "_agents_state.html" %}
 </div>
 
@@ -59,4 +58,43 @@
   .card.clickable:hover { border-color:var(--accent); }
   .card .reason { margin-top:6px; font-size:12px; color:var(--bad); border-left:2px solid var(--bad); padding-left:8px; }
 </style>
+<script>
+  // Refresh only what changed. Each poll compares the new HTML with the last one and replaces
+  // just the column (or the activity panel) whose HTML differs. The rest of the page is left alone.
+  (function () {
+    if (window.__wfPipelineTimer) clearInterval(window.__wfPipelineTimer);
+    var lastColumns = null, lastActivity = null;
+
+    function refreshColumns() {
+      fetch("/agents/board/columns", { cache: "no-store" })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (cols) {
+          if (!cols) return;
+          if (lastColumns === null) { lastColumns = cols; return; }  // first read: the page already shows it
+          Object.keys(cols).forEach(function (stage) {
+            if (lastColumns[stage] === cols[stage]) return;
+            var el = document.querySelector('#board section[data-stage="' + stage + '"]');
+            if (el) el.outerHTML = cols[stage];
+          });
+          lastColumns = cols;
+        })
+        .catch(function () {});
+    }
+
+    function refreshActivity() {
+      fetch("/agents/state", { cache: "no-store" })
+        .then(function (r) { return r.ok ? r.text() : null; })
+        .then(function (html) {
+          if (html === null) return;
+          var panel = document.getElementById("activity");
+          if (lastActivity === null) { lastActivity = html; return; }
+          if (html !== lastActivity && panel) panel.innerHTML = html;
+          lastActivity = html;
+        })
+        .catch(function () {});
+    }
+
+    window.__wfPipelineTimer = setInterval(function () { refreshColumns(); refreshActivity(); }, 4000);
+  })();
+</script>
 {% endblock %}

@@ -132,3 +132,10 @@ def test_a_jira_webhook_needs_the_token_and_wakes_the_sync(client, monkeypatch):
     agents_views._jira_changed.clear()
     client.post("/webhooks/jira/tok123", json={"webhookEvent": "comment_created"})
     assert not agents_views._jira_changed.is_set()
+
+
+def test_the_board_sends_each_column_separately(client):
+    cols = client.get("/agents/board/columns").json()
+    assert "in_refinement" in cols and "in_dev" in cols
+    assert 'data-stage="in_dev"' in cols["in_dev"]
+    assert "<section" not in client.get("/agents/state").text

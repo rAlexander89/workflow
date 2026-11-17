@@ -148,7 +148,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             conn.close()
         columns = []
         for st in stage_view.ordered_stages():
-            columns.append({"label": st["label"], "owner": st["owner"], "role": st["role"],
+            columns.append({"stage": st["name"], "label": st["label"], "owner": st["owner"], "role": st["role"],
                             "tickets": by_stage.get(st["name"], [])})
         with _lock:
             state = {"running": _state["running"], "last": _state["last"], "log": list(_state["log"])}
@@ -164,6 +164,13 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
     @app.get("/agents/board", response_class=HTMLResponse)
     def board_partial(request: Request):
         return templates.TemplateResponse(request, "_board.html", context())
+
+    @app.get("/agents/board/columns")
+    def board_columns():
+        """Each column's HTML, keyed by stage. The page swaps in only the columns that changed."""
+        ctx = context()
+        column = templates.get_template("_column.html")
+        return {col["stage"]: column.render(col=col, state=ctx["state"]) for col in ctx["columns"]}
 
     def pass_work(c):
         access = c.model.claude_code_access
