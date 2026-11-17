@@ -11,6 +11,7 @@ that branch: dev writes to it, review and QA check it, and the merge gate reads 
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -219,6 +220,11 @@ def run_agent(
     }
     gateway = [sys.executable, "-m", "wf.gateway_server"]
     env.update({"WF_BOT_EMAIL": bot_email, "WF_BOT_CREDENTIALS": cred_path})
+    if os.environ.get("WF_RUNNER_SECRET") and regression_url:
+        # The secret goes to the dev deploy's hostname only. Prod is never configured here.
+        from urllib.parse import urlsplit
+        env["WF_RUNNER_SECRET"] = os.environ["WF_RUNNER_SECRET"]
+        env["WF_RUNNER_SECRET_HOST"] = urlsplit(regression_url).hostname or ""
     if on_dev:
         env["WF_BOT_APP"] = regression_url  # the bot signs in to the same app it tests
     result = claude_run.run(

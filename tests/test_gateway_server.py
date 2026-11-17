@@ -171,3 +171,26 @@ def test_fetch_local_refuses_the_sign_up_page(db, tmp_path):
         assert "sign-up pages are not part of QA" in res["content"][0]["text"]
     finally:
         call(g, "stop_app")
+
+
+def test_runner_headers_name_the_bot_and_send_the_secret_only_to_the_dev_host():
+    dev = gateway_server.runner_headers("https://dev.fokist.com/login", "qa", "s3cret", "dev.fokist.com")
+    assert dev == {"User-Agent": "wf-qa-bot/1.0", "X-Wf-Runner-Secret": "s3cret"}
+
+    prod = gateway_server.runner_headers("https://fokist.com/login", "qa", "s3cret", "dev.fokist.com")
+    assert prod == {"User-Agent": "wf-qa-bot/1.0"}
+
+    local = gateway_server.runner_headers("http://127.0.0.1:3002/login", "qa", "s3cret", "dev.fokist.com")
+    assert local == {"User-Agent": "wf-qa-bot/1.0"}
+
+    no_secret = gateway_server.runner_headers("https://dev.fokist.com/login", "dev", "", "dev.fokist.com")
+    assert no_secret == {"User-Agent": "wf-dev-bot/1.0"}
+
+    no_host = gateway_server.runner_headers("https://dev.fokist.com/login", "dev", "s3cret", "")
+    assert "X-Wf-Runner-Secret" not in no_host
+
+
+def test_scope_reads_the_runner_secret_and_its_host_from_the_environment():
+    s = gateway_server.Scope({"WF_ROLE": "qa", "WF_KEY": "ABC-1", "WF_RUNNER_SECRET": "x",
+                              "WF_RUNNER_SECRET_HOST": "dev.fokist.com"})
+    assert s.runner_secret == "x" and s.runner_secret_host == "dev.fokist.com"

@@ -29,6 +29,27 @@ from wf import board
 
 PROTOCOL = "2024-11-05"
 
+# Requests to a remote app carry this header. Cloudflare skips its browser checks for a request
+# that has the matching secret (see infra/cloudflare), so the bot can reach dev from this machine.
+RUNNER_SECRET_HEADER = "X-Wf-Runner-Secret"
+
+
+def runner_headers(url: str, role: str, secret: str, secret_host: str) -> dict[str, str]:
+    """Headers for a request the runner makes to the app.
+
+    The User-Agent names the bot, so it can be told apart from a browser and from Python's default.
+    The secret goes only to secret_host (the dev deploy). Any other host, including prod and the
+    local app, never sees it.
+    """
+    import urllib.parse
+
+    headers = {"User-Agent": f"wf-{role or 'agent'}-bot/1.0"}
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    if secret and secret_host and host == secret_host.lower():
+        headers[RUNNER_SECRET_HEADER] = secret
+    return headers
+
+
 # Sign-up pages create accounts. QA never needs them, so fetch_local refuses them.
 SIGNUP_SEGMENTS = ("register", "signup", "sign-up", "sign_up")
 
@@ -104,6 +125,8 @@ class Scope:
         self.bot_email = env.get("WF_BOT_EMAIL", "")  # this run's app account
         self.bot_credentials = Path(env["WF_BOT_CREDENTIALS"]) if env.get("WF_BOT_CREDENTIALS") else None
         self.bot_app = env.get("WF_BOT_APP", "http://127.0.0.1:3002")  # the local app; bots sign in through its login form
+        self.runner_secret = env.get("WF_RUNNER_SECRET", "")  # sent to runner_secret_host only; see runner_headers
+        self.runner_secret_host = env.get("WF_RUNNER_SECRET_HOST", "")  # the dev deploy's hostname, nothing else
         if not self.role or not self.key:
             raise ValueError("WF_ROLE and WF_KEY are required")
 
@@ -289,8 +312,9 @@ class Gateway:
         if is_signup_path(path):
             raise ValueError("sign-up pages are not part of QA; the bot only signs in with bot_login")
         url = f"{base}{path}"
+        req = urllib.request.Request(url, headers=self._runner_headers(url))
         try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=10) as resp:
                 return {"status": resp.status, "body": resp.read(4000).decode(errors="replace")}
         except urllib.error.HTTPError as e:
             return {"status": e.code, "body": e.read(4000).decode(errors="replace")}
@@ -331,13 +355,18 @@ class Gateway:
 
         return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self._bot_jar), NoRedirect)
 
+    def _runner_headers(self, url: str) -> dict[str, str]:
+        return runner_headers(url, self.scope.role, self.scope.runner_secret, self.scope.runner_secret_host)
+
     def _bot_form(self, path: str, form: dict) -> tuple[int, str, str]:
         import urllib.error
         import urllib.parse
         import urllib.request
 
         data = urllib.parse.urlencode(form).encode()
-        req = urllib.request.Request(self.scope.bot_app.rstrip("/") + path, data=data, method="POST")
+        target = self.scope.bot_app.rstrip("/") + path
+        req = urllib.request.Request(target, data=data, method="POST",
+                                     headers=self._runner_headers(target))
         try:
             with self._bot_opener().open(req, timeout=20) as resp:
                 return resp.status, resp.headers.get("Location", ""), ""
@@ -355,7 +384,9 @@ class Gateway:
             raise PermissionError(f"login failed for {self.scope.bot_email} (HTTP {status})")
         # The session cookie must open a page that needs a login.
         try:
-            with self._bot_opener().open(self.scope.bot_app.rstrip("/") + "/search", timeout=20) as resp:
+            target = self.scope.bot_app.rstrip("/") + "/search"
+            req = urllib.request.Request(target, headers=self._runner_headers(target))
+            with self._bot_opener().open(req, timeout=20) as resp:
                 if resp.status != 200:
                     raise PermissionError("logged in, but the session is not accepted")
         except urllib.error.HTTPError as e:
