@@ -33,7 +33,7 @@ STAGE_PATTERNS: list[tuple[str, str]] = [
     ("merged", r"\bmerged\b"),
     ("regression", r"\bregression\b"),
     ("performance", r"\bperformance\b"),
-    ("deployed", r"\bdeployed\b|\breleased\b"),
+    ("deployed", r"\bdeployed to dev\b|\bdone\b"),
 ]
 STAGES = [stage for stage, _ in STAGE_PATTERNS]
 _COMPILED = [(stage, re.compile(pattern)) for stage, pattern in STAGE_PATTERNS]

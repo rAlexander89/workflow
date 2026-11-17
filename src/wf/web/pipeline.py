@@ -19,7 +19,7 @@ STAGE_INFO: dict[str, tuple[str, str]] = {
     "merged": ("Merged to main", "Harness"),
     "regression": ("Regression", "QA"),
     "performance": ("Performance", "Performance bot"),
-    "deployed": ("Deployed to prod", "Person"),
+    "deployed": ("Done (on dev)", "Done"),
 }
 
 

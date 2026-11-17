@@ -17,7 +17,7 @@ STATUSES = [
     {"name": "Ready for dev", "category": "new"},
     {"name": "Dev in progress", "category": "indeterminate"},
     {"name": "PR open", "category": "indeterminate"},
-    {"name": "Deployed to prod", "category": "done"},
+    {"name": "Deployed to dev", "category": "done"},
 ]
 PROJECT = {"key": "ABC", "name": "Example", "statuses": STATUSES}
 
@@ -84,7 +84,7 @@ def test_status_to_stage_comes_from_the_mapping(conn):
         "Ready for dev": "ready_for_dev",
         "Dev in progress": "in_dev",
         "PR open": "pr_open",
-        "Deployed to prod": "deployed",
+        "Deployed to dev": "deployed",
     }
 
 
@@ -134,7 +134,7 @@ def test_removed_ticket_that_returns_is_restored(conn):
 
 def test_past_sync_fetches_closed_sprint_tickets(conn):
     r = sync(conn, payload(kind="past", sprints=[sprint("100", "closed")],
-                           tickets=[ticket("ABC-9", sprint_id="100", status="Deployed to prod")]))
+                           tickets=[ticket("ABC-9", sprint_id="100", status="Deployed to dev")]))
     assert r.counts["tickets_created"] == 1
     assert ticket_row(conn, "ABC-9")["sprint_id"] == "100"
     assert board.active_board(conn) == []  # past tickets are not on the active board
@@ -143,7 +143,7 @@ def test_past_sync_fetches_closed_sprint_tickets(conn):
 def test_past_sync_never_overwrites_a_ticket_in_an_active_sprint(conn):
     sync(conn, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
     r = sync(conn, payload(kind="past", sprints=[sprint("100", "closed")],
-                           tickets=[ticket("ABC-1", sprint_id="100", status="Deployed to prod")]))
+                           tickets=[ticket("ABC-1", sprint_id="100", status="Deployed to dev")]))
     assert r.counts["skipped_active"] == 1
     row = ticket_row(conn, "ABC-1")
     assert row["jira_status"] == "Ready for dev" and row["sprint_id"] == "101"
@@ -290,7 +290,7 @@ def test_backlog_sync_reflects_a_ticket_taken_out_of_its_sprint(conn):
 def test_past_sync_still_does_not_overwrite_active_sprint_tickets(conn):
     sync(conn, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
     r = sync(conn, payload(kind="past", sprints=[sprint("100", "closed")],
-                           tickets=[ticket("ABC-1", sprint_id="100", status="Deployed to prod")]))
+                           tickets=[ticket("ABC-1", sprint_id="100", status="Deployed to dev")]))
     assert r.counts["skipped_active"] == 1
     assert ticket_row(conn, "ABC-1")["sprint_id"] == "101"
 

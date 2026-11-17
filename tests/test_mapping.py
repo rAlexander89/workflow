@@ -18,7 +18,7 @@ def test_common_status_names_match_one_stage():
         "QA approved": "qa_approved",
         "Merged to main": "merged",
         "Regression testing": "regression",
-        "Deployed to prod": "deployed",
+        "Deployed to dev": "deployed",
     }
     for name, stage in cases.items():
         assert stages_for(name) == [stage], name
