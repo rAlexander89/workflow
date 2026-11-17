@@ -305,18 +305,18 @@ def test_regression_runs_against_the_dev_url_and_its_bot_signs_in_there(conn, re
     calls = []
     res = agents.run_agent(conn, "qa", "ABC-1", repo=repo, runs_dir=tmp_path / "runs", access=True,
                            model="m", claude_bin="/bin/echo", runner=fake_runner(calls), clock=clock,
-                           app_url="http://127.0.0.1:3002", regression_url="https://dev.fokist.com",
-                           bot_domain="fokist.com", bot_credentials="/tmp/c.env")
+                           app_url="http://127.0.0.1:3002", regression_url="https://dev.example.com",
+                           bot_domain="example.com", bot_credentials="/tmp/c.env")
     env = json.loads((res.run.output_path.parent / "gateway.json").read_text())["mcpServers"]["gateway"]["env"]
-    assert env["WF_APP_URL"] == "https://dev.fokist.com"
-    assert env["WF_BOT_APP"] == "https://dev.fokist.com"
+    assert env["WF_APP_URL"] == "https://dev.example.com"
+    assert env["WF_BOT_APP"] == "https://dev.example.com"
 
 
 def test_other_stages_keep_the_local_app(conn, repo, tmp_path):
     calls = []
     res = agents.run_agent(conn, "dev", "ABC-1", repo=repo, runs_dir=tmp_path / "runs", access=True,
                            model="m", claude_bin="/bin/echo", runner=fake_runner(calls), clock=clock,
-                           app_url="http://127.0.0.1:3002", regression_url="https://dev.fokist.com")
+                           app_url="http://127.0.0.1:3002", regression_url="https://dev.example.com")
     env = json.loads((res.run.output_path.parent / "gateway.json").read_text())["mcpServers"]["gateway"]["env"]
     assert env["WF_APP_URL"] == "http://127.0.0.1:3002"
     assert "WF_BOT_APP" not in env

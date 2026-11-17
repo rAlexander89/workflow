@@ -3,7 +3,7 @@ import subprocess
 
 from wf import forge
 
-URL = "https://gitlab.home.lan/fokist/fokist/-/merge_requests/7"
+URL = "https://git.example.com/acme/app/-/merge_requests/7"
 
 
 def glab(routes, calls):
@@ -21,26 +21,26 @@ def glab(routes, calls):
 def test_gitlab_mr_open_with_jobs_running_is_pending():
     calls = []
     routes = {
-        "/merge_requests/7/commits": [{"title": "FKST-29: fix"}],
+        "/merge_requests/7/commits": [{"title": "ABC-29: fix"}],
         "/merge_requests/7": {"state": "opened", "sha": "abc", "head_pipeline": {"id": 9}, "detailed_merge_status": "mergeable"},
         "/pipelines/9/jobs": [{"status": "running"}],
     }
-    st = forge.GitLab(host="gitlab.home.lan", runner=glab(routes, calls)).pr_status(URL)
+    st = forge.GitLab(host="git.example.com", runner=glab(routes, calls)).pr_status(URL)
     assert st["ok"] and st["state"] == "OPEN" and not st["merged"] and st["checks"] == "pending"
-    assert st["commit_subjects"] == ["FKST-29: fix"]
+    assert st["commit_subjects"] == ["ABC-29: fix"]
 
 
 def test_gitlab_merged_mr_reports_merged(tmp_path):
     routes = {"/merge_requests/7/commits": [], "/merge_requests/7": {"state": "merged", "sha": "abc", "head_pipeline": None}}
-    st = forge.GitLab(host="gitlab.home.lan", runner=glab(routes, [])).pr_status(URL)
+    st = forge.GitLab(host="git.example.com", runner=glab(routes, [])).pr_status(URL)
     assert st["merged"] and st["state"] == "MERGED"
 
 
 def test_gitlab_merge_request_is_opened_and_merged():
     calls = []
-    routes = {"/merge_requests": {"web_url": "https://gitlab.home.lan/fokist/fokist/-/merge_requests/8"}}
-    g = forge.GitLab(host="gitlab.home.lan", runner=glab(routes, calls))
-    assert g.open_pr("fokist/fokist", "agent/FKST-29", "FKST-29: x", "body").endswith("/merge_requests/8")
+    routes = {"/merge_requests": {"web_url": "https://git.example.com/acme/app/-/merge_requests/8"}}
+    g = forge.GitLab(host="git.example.com", runner=glab(routes, calls))
+    assert g.open_pr("acme/app", "agent/ABC-29", "ABC-29: x", "body").endswith("/merge_requests/8")
     assert any("-X" in c and "POST" in c for c in calls)
 
 

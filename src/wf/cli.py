@@ -197,7 +197,7 @@ def _source_control(c, interactive: bool) -> tuple[str, str, str]:
         return "local", "", ""
     if choice == "4":
         return "github", "", c.remote or _ask("Org/repo it pushes to (owner/name)", "")
-    host = _ask("GitLab host (e.g. gitlab.home.lan or gitlab.com)", "gitlab.com")
+    host = _ask("GitLab host (e.g. git.example.com or gitlab.com)", "gitlab.com")
     project = c.remote or _ask("GitLab project path (group/project)", "")
     return "gitlab", host, project
 
@@ -287,7 +287,7 @@ def cmd_init(args) -> int:
 
         c_ = cfgmod.load(path)
         if not c_.bots.enabled:
-            result = _bots.setup_interactive(c_.bots.domain or "fokist.com")
+            result = _bots.setup_interactive(c_.bots.domain or "example.com")
             if result:
                 c_.bots = cfgmod.BotsConfig(**result)
                 cfgmod.save(c_, path)
@@ -582,7 +582,7 @@ def cmd_bots_setup(args) -> int:
 
     path = _cfg_path(args)
     c = cfgmod.load(path)
-    domain = args.domain or c.bots.domain or "fokist.com"
+    domain = args.domain or c.bots.domain or "example.com"
     if args.yes:
         written = bots.write_credentials(bots.credentials_path(),
                                          {r: {"email": bots.account_email(r, domain)} for r in bots.ROLES})
@@ -814,7 +814,7 @@ def build_parser() -> argparse.ArgumentParser:
     bt = sub.add_parser("bots", help="bot accounts: set them up, or see what they may do")
     bt_sub = bt.add_subparsers(dest="bots_cmd", required=True)
     bs = bt_sub.add_parser("setup", help="ask whether to create bot credentials, then create them")
-    bs.add_argument("--domain", default=None, help="accounts are <role>@<domain> (default: fokist.com)")
+    bs.add_argument("--domain", default=None, help="accounts are <role>@<domain> (default: example.com)")
     bs.add_argument("--yes", action="store_true", help="skip the question and create them")
     bs.add_argument("--config", default=None)
     bs.set_defaults(func=cmd_bots_setup)

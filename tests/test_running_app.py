@@ -11,7 +11,7 @@ def running_app():
     """An app that is already running on a local port, like the one the user keeps up."""
     class H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            body = b"<h1>Fokist</h1>" if self.path != "/missing" else b"no"
+            body = b"<h1>Example</h1>" if self.path != "/missing" else b"no"
             self.send_response(200 if self.path != "/missing" else 404)
             self.end_headers()
             self.wfile.write(body)
@@ -50,6 +50,6 @@ def test_agent_gateway_uses_the_running_app(tmp_path, running_app):
     out = g.start_app({})
     assert out["url"] == running_app
     page = g.fetch_local({"path": "/"})
-    assert page["status"] == 200 and "Fokist" in page["body"]
+    assert page["status"] == 200 and "Example" in page["body"]
     g.stop_app({})
     assert envs.answers(running_app)  # the agent never stops the app it borrowed

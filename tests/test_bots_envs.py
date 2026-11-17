@@ -7,33 +7,33 @@ from wf import bots, envs
 
 def test_credentials_are_written_once_with_owner_only_permissions(tmp_path):
     path = tmp_path / "creds.env"
-    accounts = {r: {"email": bots.account_email(r, "fokist.com")} for r in ("dev", "qa")}
+    accounts = {r: {"email": bots.account_email(r, "example.com")} for r in ("dev", "qa")}
     assert bots.write_credentials(path, accounts) == ["dev", "qa"]
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     first = path.read_text()
-    assert "DEV_EMAIL=dev@fokist.com" in first and "QA_PASSWORD=" in first
+    assert "DEV_EMAIL=dev@example.com" in first and "QA_PASSWORD=" in first
     assert bots.write_credentials(path, accounts) == []  # existing passwords are kept
     assert path.read_text() == first
 
 
 def test_setup_declined_writes_nothing(tmp_path):
     said = []
-    out = bots.setup_interactive("fokist.com", ask=lambda q: "n", say=said.append, path=tmp_path / "c.env")
+    out = bots.setup_interactive("example.com", ask=lambda q: "n", say=said.append, path=tmp_path / "c.env")
     assert out is None and not (tmp_path / "c.env").exists()
     text = "\n".join(said)
     assert "Bots may:" in text and "Bots may not:" in text
 
 
 def test_setup_accepted_writes_credentials_and_returns_config(tmp_path):
-    out = bots.setup_interactive("fokist.com", ask=lambda q: "y", say=lambda m: None, path=tmp_path / "c.env")
-    assert out["enabled"] and out["domain"] == "fokist.com"
+    out = bots.setup_interactive("example.com", ask=lambda q: "y", say=lambda m: None, path=tmp_path / "c.env")
+    assert out["enabled"] and out["domain"] == "example.com"
     text = (tmp_path / "c.env").read_text()
-    assert "STAFF_EMAIL=staff@fokist.com" in text and "_PASSWORD=" in text
+    assert "STAFF_EMAIL=staff@example.com" in text and "_PASSWORD=" in text
 
 
 def test_passwords_are_never_printed(tmp_path):
     said = []
-    bots.setup_interactive("fokist.com", ask=lambda q: "y", say=said.append, path=tmp_path / "c.env")
+    bots.setup_interactive("example.com", ask=lambda q: "y", say=said.append, path=tmp_path / "c.env")
     secret = [l.split("=", 1)[1] for l in (tmp_path / "c.env").read_text().splitlines() if "_PASSWORD=" in l]
     assert secret and not any(v in m for m in said for v in secret)
 

@@ -11,7 +11,7 @@ PASSWORD = "Sup3r-secret!pw"
 
 
 class FakeAuthAPI(http.server.BaseHTTPRequestHandler):
-    """Acts like the Fokist HTML login: a form POST sets a session cookie and redirects."""
+    """Acts like the Example HTML login: a form POST sets a session cookie and redirects."""
     sessions = set()
 
     def _reply(self, code, body=b"", headers=()):
@@ -29,7 +29,7 @@ class FakeAuthAPI(http.server.BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0))
         form = urllib.parse.parse_qs(self.rfile.read(n).decode())
         if self.path == "/login":
-            ok = form.get("email") == ["qa@fokist.com"] and form.get("password") == [PASSWORD]
+            ok = form.get("email") == ["qa@example.com"] and form.get("password") == [PASSWORD]
             if ok:
                 FakeAuthAPI.sessions.add("sid")
                 return self._reply(303, headers=[("Location", "/search"), ("Set-Cookie", "sid=ok; Path=/")])
@@ -65,7 +65,7 @@ def creds(tmp_path):
     return p
 
 
-def gw(api, creds, role="qa", email="qa@fokist.com"):
+def gw(api, creds, role="qa", email="qa@example.com"):
     return gateway_server.Gateway(gateway_server.Scope({
         "WF_ROLE": role, "WF_KEY": "ABC-1", "WF_DB": "x.sqlite", "WF_BOT_EMAIL": email,
         "WF_BOT_CREDENTIALS": str(creds), "WF_BOT_APP": api}))
@@ -74,13 +74,13 @@ def gw(api, creds, role="qa", email="qa@fokist.com"):
 def test_bot_logs_in_and_the_password_is_never_returned(api, creds):
     g = gw(api, creds)
     out = g.bot_login({})
-    assert out == {"logged_in": True, "email": "qa@fokist.com"}
+    assert out == {"logged_in": True, "email": "qa@example.com"}
     assert PASSWORD not in json.dumps(out)
     assert g.bot_logout({})["logged_out"] is True
 
 
 def test_wrong_bot_password_is_refused_without_leaking_it(api, creds):
-    g = gw(api, creds, role="dev", email="dev@fokist.com")
+    g = gw(api, creds, role="dev", email="dev@example.com")
     with pytest.raises(PermissionError, match="login failed"):
         g.bot_login({})
 
@@ -92,8 +92,8 @@ def test_a_run_without_a_bot_account_cannot_log_in(api, creds):
 
 
 def test_system_prompt_names_the_account_and_file_but_never_the_password(tmp_path):
-    text = agents.system_prompt("qa", "qa@fokist.com", "/home/x/.config/fokist-bots/credentials.env")
-    assert "qa@fokist.com" in text and "credentials.env" in text
+    text = agents.system_prompt("qa", "qa@example.com", "/home/x/.config/example-bots/credentials.env")
+    assert "qa@example.com" in text and "credentials.env" in text
     assert "bot_login" in text and PASSWORD not in text
     assert "##" in text  # the identity block is its own section
-    assert "qa@fokist.com" not in agents.system_prompt("qa")  # no block without a bot account
+    assert "qa@example.com" not in agents.system_prompt("qa")  # no block without a bot account
