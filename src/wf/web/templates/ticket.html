@@ -24,6 +24,9 @@
   .jnode.failed { border-color:var(--bad); } .jnode.failed .jdot { background:var(--bad); }
   .jnode.cancelled, .jnode.skipped, .jnode.waiting { opacity:.6; }
   .jarrow { color:var(--muted); }
+  .chip.dev { background:var(--ok-bg); color:var(--ok); }
+  .chip.prod { background:var(--accent); color:var(--accent-fg); }
+  .chip.wip { background:var(--warn-bg); color:var(--warn); }
   .callout { border:1px solid var(--bad); background:var(--bad-bg); border-radius:10px; padding:12px 14px; margin-top:12px; }
   .callout b { color:var(--bad); }
   @media (max-width:760px) { .cols { grid-template-columns:1fr; } }
@@ -36,7 +39,7 @@
     <div class="row" style="gap:6px">
       <span class="chip">Jira: {{ ticket.jira_status }}</span>
       <span class="chip">{{ ticket.issue_type or 'issue' }}</span>
-      <span class="chip">stage: {{ ticket.stage or 'none' }}</span>
+      <span class="chip {{ marker[1] }}">{{ marker[0] }}</span>
     </div>
   </div>
   <div class="row">

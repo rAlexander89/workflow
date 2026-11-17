@@ -143,6 +143,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             return page(request, "ticket.html", "agents", ticket=t, comments=detail["comments"],
                         events=events, noise_count=len(noise), flag_reason=flag_reason, outbox_items=items, runs=runs, next_role=next_role,
                         stages=_pipeline.progress(t["stage"]), title=key, failures=failure_list,
+                        marker=_pipeline.stage_marker(t["stage"]),
                         flow=_pipeline.flow_states(
                             t["stage"],
                             last_run_failed=bool(runs and (runs[0]["exit_code"] != 0 or runs[0]["timed_out"])),

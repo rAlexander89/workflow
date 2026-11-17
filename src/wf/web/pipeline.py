@@ -54,8 +54,6 @@ FLOW = [
     ("main", "In main (GitHub)", None),
     ("dev", "Deployed to dev", None),
     ("regression", "Regression on dev", "regression"),
-    ("performance", "Performance", "performance"),
-    ("prod", "Deployed to prod", "deployed"),
 ]
 _ORDER = [stage for _, _, stage in FLOW if stage]
 
@@ -125,3 +123,17 @@ def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: boo
             state = "done" if prod_deployed else ("current" if (stage == "deployed" or prod_ready) else "todo")
         out.append({"key": key, "label": label, "state": state})
     return out
+
+
+IN_PROGRESS_STAGES = {"backlog", "needs_refinement", "in_refinement", "hotfix_review", "ready_for_dev", "in_dev",
+                      "pr_open", "pr_in_review", "ready_for_perf_review", "ready_for_qa", "qa_approved"}
+DEVELOPMENT_STAGES = {"merged", "regression", "performance", "deployed"}
+
+
+def stage_marker(stage: str | None) -> tuple[str, str]:
+    """The single status marker for a ticket: (label, css class)."""
+    if stage in DEVELOPMENT_STAGES:
+        return "Stage: Development", "dev"
+    if stage == "released":
+        return "Stage: Production", "prod"
+    return "Stage: In Progress", "wip"
