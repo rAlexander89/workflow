@@ -71,11 +71,14 @@
         .then(function (cols) {
           if (!cols) return;
           if (lastColumns === null) { lastColumns = cols; return; }  // first read: the page already shows it
+          var board = document.querySelector("#board .board");
+          var left = board ? board.scrollLeft : 0;
           Object.keys(cols).forEach(function (stage) {
             if (lastColumns[stage] === cols[stage]) return;
             var el = document.querySelector('#board section[data-stage="' + stage + '"]');
             if (el) el.outerHTML = cols[stage];
           });
+          if (board) board.scrollLeft = left;
           lastColumns = cols;
         })
         .catch(function () {});
