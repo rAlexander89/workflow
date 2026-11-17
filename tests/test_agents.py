@@ -350,10 +350,10 @@ def test_a_local_repo_merges_on_its_own_and_counts_as_dev(conn, repo, tmp_path):
 def test_a_finished_stage_is_not_run_again_until_something_changes(conn, repo, tmp_path):
     _set_stage(conn, "regression")
     conn.execute("insert into agent_run (key, stage, role, started_at, exit_code, timed_out, output_path) "
-                 "values ('ABC-1','regression','qa',1000,0,0,'x')")
+                 "values ('ABC-1','regression','qa',4000000000,0,0,'x')")
     conn.commit()
     assert agents._finished_and_unchanged(conn, "ABC-1", "regression")
-    conn.execute("insert into ticket_event (ticket_key, at, actor, kind) values ('ABC-1', 2000, 'user', 'comment')")
+    conn.execute("insert into ticket_event (ticket_key, at, actor, kind) values ('ABC-1', 4000000100, 'user', 'comment')")
     conn.commit()
     assert not agents._finished_and_unchanged(conn, "ABC-1", "regression")
 
@@ -385,3 +385,14 @@ def test_only_one_sprint_ticket_starts_at_a_time(conn, repo, tmp_path):
     conn.commit()
     agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: False)
     assert ticket_row(conn, "ABC-2")["stage"] == "backlog"
+
+
+def test_a_review_that_sends_the_ticket_back_makes_the_stage_run_again(conn):
+    _set_stage(conn, "in_dev")
+    conn.execute("insert into agent_run (key, stage, role, started_at, exit_code, timed_out, output_path) "
+                 "values ('ABC-1','in_dev','dev',4000000000,0,0,'x')")
+    conn.commit()
+    assert agents._finished_and_unchanged(conn, "ABC-1", "in_dev")
+    conn.execute("insert into ticket_event (ticket_key, at, actor, kind) values ('ABC-1', 4000000100, 'pr_review', 'stage')")
+    conn.commit()
+    assert not agents._finished_and_unchanged(conn, "ABC-1", "in_dev")

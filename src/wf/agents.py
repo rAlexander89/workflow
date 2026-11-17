@@ -308,16 +308,19 @@ def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, dev_deployed=None)
 
 
 def _finished_and_unchanged(conn: sqlite3.Connection, key: str, stage: str) -> bool:
-    """True when the last run in this stage succeeded and no person or system event came after it."""
+    """True when the last run in this stage succeeded and nothing has happened to the ticket since.
+
+    An event by anyone other than that run's own role counts as a change, so a review that sends the
+    ticket back to this stage makes the stage run again.
+    """
     last = conn.execute(
-        "select exit_code, timed_out, started_at from agent_run where key = ? and stage = ? "
+        "select role, exit_code, timed_out, started_at from agent_run where key = ? and stage = ? "
         "order by id desc limit 1", (key, stage)).fetchone()
     if last is None or last["timed_out"] or last["exit_code"] != 0:
         return False
     changed = conn.execute(
-        "select 1 from ticket_event where ticket_key = ? and at > ? and actor not in "
-        "('pr_review','perf_review','qa','dev','performance','product','staff','pr_review') limit 1",
-        (key, last["started_at"])).fetchone()
+        "select 1 from ticket_event where ticket_key = ? and at >= ? and actor != ? limit 1",
+        (key, last["started_at"], last["role"])).fetchone()
     return changed is None
 
 
