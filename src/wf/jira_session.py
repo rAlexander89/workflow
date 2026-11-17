@@ -24,7 +24,7 @@ READ_TOOLS = [
     "mcp__atlassian__getJiraIssue",
     "mcp__atlassian__getTransitionsForJiraIssue",
 ]
-WRITE_TOOLS = ["mcp__atlassian__transitionJiraIssue", "mcp__atlassian__editJiraIssue"]
+WRITE_TOOLS = ["mcp__atlassian__transitionJiraIssue", "mcp__atlassian__editJiraIssue", "mcp__atlassian__createIssueLink"]
 BUILTIN_OFF = ["Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch"]
 
 SYNC_JQL = ("assignee = currentUser() AND (sprint in openSprints() "
@@ -118,6 +118,28 @@ def fetch_sync_payload(**kw) -> dict:
     if not isinstance(payload, dict) or payload.get("kind") != "active":
         raise RuntimeError("the session did not return an active sync payload")
     return payload
+
+
+def create_blocking_links(pairs: list[tuple[str, str]], **kw) -> list[tuple[str, str]]:
+    """Create Jira "Blocks" links: the prerequisite blocks the dependent. Returns the pairs Jira linked."""
+    for prerequisite, dependent in pairs:
+        for key in (prerequisite, dependent):
+            if not re.fullmatch(r"[A-Z][A-Z0-9]+-\\d+", key):
+                raise ValueError(f"bad ticket key {key!r}")
+    listing = "\n".join(f"   - {p} blocks {d}" for p, d in pairs)
+    out = session(
+        "You are the Jira writer for the wf workflow. Use only the Atlassian tools.\n\n"
+        "1. Call getAccessibleAtlassianResources and take the first site's id as cloudId.\n"
+        "2. For each link below, call createIssueLink with link type 'Blocks': the first key is the outward "
+        "issue (it blocks), the second is the inward issue (it is blocked). Change nothing else.\n"
+        + listing + "\n\n"
+        'Reply with ONLY one JSON object: {"linked": [["PREREQ", "DEPENDENT"], ...]} listing the links Jira created.',
+        allowed=READ_TOOLS + ["mcp__atlassian__createIssueLink"], **kw)
+    if not isinstance(out, dict) or not isinstance(out.get("linked"), list):
+        raise RuntimeError(f"Jira did not confirm the links: {out}")
+    wanted = set(pairs)
+    return [(p, d) for p, d in (tuple(x) for x in out["linked"] if isinstance(x, (list, tuple)) and len(x) == 2)
+            if (p, d) in wanted]
 
 
 def move_tickets_to_sprint(keys: list[str], sprint_id: str, **kw) -> list[str]:

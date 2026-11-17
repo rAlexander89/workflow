@@ -372,19 +372,21 @@ def test_a_regression_pass_without_a_perf_request_goes_to_deployed(conn, repo, t
     assert ticket_row(conn, "ABC-1")["stage"] == "deployed"
 
 
-def test_a_sprint_backlog_ticket_goes_to_ready_for_dev(conn, repo, tmp_path):
+def test_a_sprint_backlog_ticket_goes_to_refinement(conn, repo, tmp_path):
     _set_stage(conn, "backlog")
     agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: False)
-    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_dev"
+    assert ticket_row(conn, "ABC-1")["stage"] == "in_refinement"
 
 
-def test_only_one_sprint_ticket_starts_at_a_time(conn, repo, tmp_path):
+def test_only_one_ticket_is_in_development_at_a_time(conn, repo, tmp_path):
     _set_stage(conn, "in_dev")  # ABC-1 is already being worked on
     conn.execute("insert into ticket (key, project_key, jira_id, summary, assignee_id, jira_status, labels, "
-                 "sprint_id, stage, flags, removed_at, synced_at) values ('ABC-2','ABC','2','Two','me','Open','[]','101','backlog','[]',null,0)")
+                 "sprint_id, stage, flags, removed_at, synced_at) values ('ABC-2','ABC','2','Two','me','Ready for dev','[]','101','ready_for_dev','[]',null,0)")
     conn.commit()
-    agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: False)
-    assert ticket_row(conn, "ABC-2")["stage"] == "backlog"
+    actions = agents.tick(conn, repo=repo, runs_dir=tmp_path, access=False, model="m", dry_run=True)
+    two = next(a for a in actions if a["key"] == "ABC-2")
+    assert two["skipped"] == "dev is busy with ABC-1"
+
 
 
 def test_a_review_that_sends_the_ticket_back_makes_the_stage_run_again(conn):
@@ -419,3 +421,98 @@ def test_a_dev_run_starts_from_the_latest_main(tmp_path):
     sp.run(["git", "push", "-q", "origin", "main"], cwd=seed, check=True)
     agents.sync_with_main(local, wt)
     assert (wt / "b.txt").exists()
+
+
+def _refinement_run(conn, role):
+    conn.execute("insert into agent_run (key, stage, role, started_at, exit_code, timed_out, output_path) "
+                 "values ('ABC-1', 'in_refinement', ?, 0, 0, 0, 'x')", (role,))
+    conn.commit()
+
+
+def test_refinement_takes_turns_product_then_staff(conn):
+    agents.ensure_schema(conn)
+    assert agents.refinement_role(conn, "ABC-1") == "product"
+    _refinement_run(conn, "product")
+    assert agents.refinement_role(conn, "ABC-1") == "staff"
+    _refinement_run(conn, "staff")
+    assert agents.refinement_role(conn, "ABC-1") == "product"
+
+
+def test_removed_needs_refinement_stage_is_gone_from_the_workflow():
+    from wf import mapping, orchestrator
+    assert "needs_refinement" not in mapping.STAGES
+    assert "needs_refinement" not in orchestrator.STAGE_OWNERS
+    assert "needs_refinement" not in agents.STAGE_ROLE
+
+
+def _add_ticket(conn, key, stage, sort_order=None):
+    conn.execute("insert into ticket (key, project_key, jira_id, summary, assignee_id, jira_status, labels, "
+                 "sprint_id, stage, flags, removed_at, synced_at, sort_order) values (?, 'ABC', ?, 'x', 'me', "
+                 "'Ready for dev', '[]', '101', ?, '[]', null, 0, ?)", (key, key, stage, sort_order))
+    conn.commit()
+
+
+def test_a_ticket_waits_for_its_prerequisite_to_merge_to_dev(conn, repo, tmp_path):
+    from wf import board as _b
+    _set_stage(conn, "deployed")  # the fixture's ticket is not in development
+    _add_ticket(conn, "ABC-5", "ready_for_dev")
+    _add_ticket(conn, "ABC-6", "pr_open")
+    _b.add_block(conn, "ABC-6", "ABC-5", actor="staff", reason="needs the first")
+    actions = agents.tick(conn, repo=repo, runs_dir=tmp_path, access=False, model="m", dry_run=True)
+    row = next(a for a in actions if a["key"] == "ABC-5")
+    assert row["skipped"] == "waiting for ABC-6 to merge to dev"
+
+
+def test_a_kicked_back_prerequisite_pauses_the_work_that_depends_on_it(conn, repo, tmp_path):
+    from wf import board as _b
+    _add_ticket(conn, "ABC-7", "in_dev")       # the prerequisite, kicked back to dev
+    _add_ticket(conn, "ABC-8", "pr_open")      # depends on it
+    _b.add_block(conn, "ABC-7", "ABC-8", actor="staff", reason="needs the first")
+    agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: False)
+    assert ticket_row(conn, "ABC-8")["stage"] == "ready_for_dev"
+    assert ticket_row(conn, "ABC-7")["stage"] == "in_dev"
+
+
+def test_refinement_stops_after_seven_product_rounds_and_asks_a_person(conn, repo, tmp_path):
+    _set_stage(conn, "in_refinement")
+    for i in range(7):
+        conn.execute("insert into agent_run (key, stage, role, started_at, exit_code, timed_out, output_path) "
+                     "values ('ABC-1','in_refinement','product',?,0,0,'x')", (1000 + i,))
+    conn.commit()
+    actions = agents.tick(conn, repo=repo, runs_dir=tmp_path, access=False, model="m", dry_run=False)
+    row = next(a for a in actions if a["key"] == "ABC-1")
+    assert "refinement rounds" in row["skipped"]
+    assert "needs-human" in ticket_row(conn, "ABC-1")["flags"]
+
+
+def test_the_dev_takes_the_sprint_order_first_and_unordered_last(conn, repo, tmp_path):
+    _add_ticket(conn, "ABC-20", "ready_for_dev", sort_order=None)
+    _add_ticket(conn, "ABC-21", "ready_for_dev", sort_order=2)
+    _add_ticket(conn, "ABC-22", "ready_for_dev", sort_order=1)
+    actions = agents.tick(conn, repo=repo, runs_dir=tmp_path, access=False, model="m", dry_run=True)
+    picked = [a["key"] for a in actions if a["skipped"] is None]
+    assert picked == ["ABC-22"]  # one dev at a time: the first in order
+
+
+def test_pause_stops_a_pass_and_stage_moves_then_resume_restarts_them(conn, repo, tmp_path):
+    from wf import pause
+    _set_stage(conn, "backlog")
+    pause.pause(conn, clock=lambda: 0)
+    assert agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: False) == []
+    assert ticket_row(conn, "ABC-1")["stage"] == "backlog"
+    assert agents.tick(conn, repo=repo, runs_dir=tmp_path, access=False, model="m", dry_run=True) == []
+
+    assert pause.resume(conn, clock=lambda: 1) is True
+    agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: False)
+    assert ticket_row(conn, "ABC-1")["stage"] == "in_refinement"
+
+
+def test_pause_is_idempotent_and_reports_state(conn):
+    from wf import pause
+    assert pause.is_paused(conn) is False
+    assert pause.pause(conn, clock=lambda: 5) is True
+    assert pause.pause(conn, clock=lambda: 6) is False
+    assert pause.paused_since(conn) == 5
+    assert pause.resume(conn, clock=lambda: 7) is True
+    assert pause.resume(conn, clock=lambda: 8) is False
+    assert pause.paused_since(conn) is None

@@ -144,3 +144,30 @@ def test_pr_review_will_not_approve_a_branch_with_stray_commits(db, tmp_path):
     g = gw(db, role="pr_review", worktree=repo)
     res = call(g, "approve_ticket")
     assert res["isError"] is True and "not approving" in res["content"][0]["text"]
+
+
+@pytest.mark.parametrize("path", [
+    "/register", "/register/", "/Register", "/register?next=/", "/signup", "/sign-up",
+    "/%72egister", "/login/../register", "//register",
+])
+def test_is_signup_path_catches_sign_up_routes(path):
+    assert gateway_server.is_signup_path(path) is True
+
+
+@pytest.mark.parametrize("path", ["/", "/login", "/search", "/login?next=/register", "/registry"])
+def test_is_signup_path_leaves_other_pages_alone(path):
+    assert gateway_server.is_signup_path(path) is False
+
+
+def test_fetch_local_refuses_the_sign_up_page(db, tmp_path):
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.html").write_text("<h1>Login</h1>")
+    g = app_gw(db, site, "python3 -m http.server {port} --bind 127.0.0.1")
+    try:
+        call(g, "start_app")
+        res = call(g, "fetch_local", {"path": "/register"})
+        assert res["isError"] is True
+        assert "sign-up pages are not part of QA" in res["content"][0]["text"]
+    finally:
+        call(g, "stop_app")

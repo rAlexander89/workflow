@@ -8,6 +8,22 @@
   · tests <code>{{ test_cmd }}</code>
 </div>
 
+<div class="panel row between" style="margin-bottom:14px">
+  {% if paused %}
+    <span><span class="warn"><b>Work is paused</b></span>
+      <span class="muted">· since {{ paused_text }}
+        · {% if state.running %}the current run is finishing: {{ state.running }}{% else %}nothing is running{% endif %}</span></span>
+    <form method="post" action="/agents/resume">
+      <button>Resume work</button>
+    </form>
+  {% else %}
+    <span class="muted">Work is running. Pausing lets the current run finish, then holds every ticket where it is.</span>
+    <form method="post" action="/agents/pause">
+      <button>Pause work</button>
+    </form>
+  {% endif %}
+</div>
+
 <div class="panel" style="margin-bottom:14px">
   <div class="row between">
     <div>

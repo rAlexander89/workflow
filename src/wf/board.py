@@ -191,7 +191,16 @@ def connect(path: Path) -> sqlite3.Connection:
     cols = [r[1] for r in conn.execute("pragma table_info(ticket)")]
     if "assignee_name" not in cols:
         conn.execute("alter table ticket add column assignee_name text")
+    if "sort_order" not in cols:
+        conn.execute("alter table ticket add column sort_order integer")
+    # The needs_refinement stage was removed: its tickets and mapping rows move to in_refinement.
+    conn.execute("update ticket set stage = 'in_refinement' where stage = 'needs_refinement'")
+    conn.execute("delete from stage_mapping where stage = 'needs_refinement'")
+    conn.commit()
     conn.executescript(LINK_SCHEMA)
+    link_cols = [r[1] for r in conn.execute("pragma table_info(ticket_link)")]
+    if "synced" not in link_cols:  # links from Jira are synced already; new local ones are not
+        conn.execute("alter table ticket_link add column synced integer not null default 1")
     conn.execute(f"pragma user_version = {SCHEMA_VERSION}")
     return conn
 
@@ -448,7 +457,7 @@ def _apply_links(conn, data: dict, result: SyncResult) -> None:
     for t in _list(data, "tickets"):
         if "links" not in t or conn.execute("select 1 from ticket where key = ?", (t["key"],)).fetchone() is None:
             continue
-        conn.execute("delete from ticket_link where ticket_key = ?", (t["key"],))
+        conn.execute("delete from ticket_link where ticket_key = ? and synced = 1", (t["key"],))
         for link in t.get("links") or []:
             conn.execute(
                 "insert or replace into ticket_link (ticket_key, other_key, link_type, direction, other_summary, "
@@ -540,6 +549,8 @@ def status_to_stage(conn: sqlite3.Connection) -> dict[str, str]:
     stages in different projects are left out, because routing can't tell them apart."""
     seen: dict[str, set[str]] = {}
     for r in conn.execute("select status_name, stage from stage_mapping where status_name is not null"):
+        if r["stage"] not in mapping.STAGES:  # a stage that no longer exists routes nothing
+            continue
         seen.setdefault(r["status_name"], set()).add(r["stage"])
     return {name: next(iter(stages)) for name, stages in seen.items() if len(stages) == 1}
 
@@ -594,9 +605,11 @@ FLAGS = ("needs-human", "blocked")
 # prompts. The user may move anything. This list is not complete: add a row when a
 # prompt gains a new allowed move. Anything not listed is refused.
 ALLOWED_MOVES: frozenset[tuple[str, str, str]] = frozenset({
-    ("staff", "needs_refinement", "ready_for_dev"),
     ("staff", "in_refinement", "ready_for_dev"),
-    ("harness", "backlog", "ready_for_dev"),
+    ("harness", "backlog", "in_refinement"),
+    ("harness", "in_dev", "ready_for_dev"),
+    ("harness", "pr_open", "ready_for_dev"),
+    ("harness", "pr_in_review", "ready_for_dev"),
     ("dev", "ready_for_dev", "in_dev"),
     ("dev", "ready_for_dev", "pr_open"),
     ("dev", "in_dev", "pr_open"),
@@ -809,3 +822,55 @@ def approvals_since_stage(conn: sqlite3.Connection, key: str, head: str, stage: 
         "select distinct actor from ticket_event where ticket_key = ? and kind = 'approve' and detail = ? and at >= ?",
         (key, head, entered)).fetchall()
     return {r["actor"] for r in rows}
+
+
+# --- ordering and dependencies --------------------------------------------------
+
+def add_block(conn: sqlite3.Connection, prerequisite: str, dependent: str, actor: str, reason: str,
+              clock: Callable[[], float] = time.time) -> None:
+    """Record that `prerequisite` must merge before `dependent` starts. Jira gets the link on the next send."""
+    if prerequisite == dependent:
+        raise BoardError("a ticket cannot block itself")
+    for k in (prerequisite, dependent):
+        if conn.execute("select 1 from ticket where key = ? and removed_at is null", (k,)).fetchone() is None:
+            raise BoardError(f"no ticket {k}")
+    now = int(clock())
+    conn.execute("insert or ignore into ticket_link (ticket_key, other_key, link_type, direction, synced) "
+                 "values (?, ?, 'Blocks', 'outward', 0)", (prerequisite, dependent))
+    conn.execute("insert or ignore into ticket_link (ticket_key, other_key, link_type, direction, synced) "
+                 "values (?, ?, 'is blocked by', 'inward', 0)", (dependent, prerequisite))
+    _event(conn, dependent, now, actor, "link", None, prerequisite, reason)
+    conn.commit()
+
+
+def blockers(conn: sqlite3.Connection, key: str) -> list[str]:
+    return [r[0] for r in conn.execute(
+        "select other_key from ticket_link where ticket_key = ? and link_type = 'is blocked by' order by other_key",
+        (key,))]
+
+
+def pending_links(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    """(prerequisite, dependent) pairs that are not yet in Jira."""
+    return [(r[0], r[1]) for r in conn.execute(
+        "select ticket_key, other_key from ticket_link where link_type = 'Blocks' and direction = 'outward' "
+        "and synced = 0 order by ticket_key, other_key")]
+
+
+def mark_linked(conn: sqlite3.Connection, pairs: list[tuple[str, str]]) -> None:
+    for prerequisite, dependent in pairs:
+        conn.execute("update ticket_link set synced = 1 where ticket_key = ? and other_key = ? and link_type = 'Blocks'",
+                     (prerequisite, dependent))
+        conn.execute("update ticket_link set synced = 1 where ticket_key = ? and other_key = ? "
+                     "and link_type = 'is blocked by'", (dependent, prerequisite))
+    conn.commit()
+
+
+def set_order(conn: sqlite3.Connection, key: str, position: int, actor: str,
+              clock: Callable[[], float] = time.time) -> None:
+    """Where the ticket sits in the sprint's work order. Lower goes first. Unordered tickets go last."""
+    row = conn.execute("select sort_order from ticket where key = ? and removed_at is null", (key,)).fetchone()
+    if row is None:
+        raise BoardError(f"no ticket {key}")
+    conn.execute("update ticket set sort_order = ? where key = ?", (int(position), key))
+    _event(conn, key, int(clock()), actor, "order", row["sort_order"], int(position), "work order")
+    conn.commit()

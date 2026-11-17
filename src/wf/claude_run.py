@@ -54,11 +54,12 @@ PROFILES: dict[str, dict[str, list[str]]] = {
     },
     "product": {
         "builtin_tools": ["Read", "Glob", "Grep"],
-        "allowed_tools": ["Read", "Glob", "Grep"] + _tools("get_ticket", "post_comment", "flag_ticket"),
+        "allowed_tools": ["Read", "Glob", "Grep"] + _tools("get_ticket", "move_ticket", "post_comment", "flag_ticket"),
     },
     "staff": {
         "builtin_tools": ["Read", "Glob", "Grep"],
-        "allowed_tools": ["Read", "Glob", "Grep"] + _tools("get_ticket", "move_ticket", "post_comment", "flag_ticket"),
+        "allowed_tools": ["Read", "Glob", "Grep"] + _tools(
+            "get_ticket", "move_ticket", "post_comment", "flag_ticket", "link_blocking", "set_order"),
     },
     "performance": {
         "builtin_tools": ["Read", "Edit", "Write", "Glob", "Grep"],

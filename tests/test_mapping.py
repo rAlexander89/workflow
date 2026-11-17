@@ -4,7 +4,6 @@ from wf.mapping import map_project, normalize, stages_for
 def test_common_status_names_match_one_stage():
     cases = {
         "Backlog": "backlog",
-        "Needs refinement": "needs_refinement",
         "In refinement": "in_refinement",
         "Hotfix review": "hotfix_review",
         "Ready for dev": "ready_for_dev",

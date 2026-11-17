@@ -28,8 +28,7 @@ MAX_RUNS_PER_STAGE = 3  # loop guard: a ticket that bounces this often needs a h
 
 # Which role runs in each stage. Stages not listed have no agent.
 STAGE_ROLE: dict[str, str] = {
-    "needs_refinement": "product",
-    "in_refinement": "staff",
+    "in_refinement": "product",  # product and staff take turns here: see refinement_role
     "hotfix_review": "staff",
     "ready_for_dev": "dev",
     "in_dev": "dev",
@@ -41,6 +40,12 @@ STAGE_ROLE: dict[str, str] = {
     "regression": "qa",
     "performance": "performance",
 }
+
+REFINEMENT_STAGES = ("in_refinement",)
+MAX_REFINEMENT_ROUNDS = 7  # product rounds without the staff bot's agreement: a person is asked
+DONE_FOR_BLOCKING = ("merged", "regression", "performance", "deployed")  # a prerequisite is on dev
+PAUSABLE = ("in_dev", "pr_open", "pr_in_review")  # dev-owned work a kicked-back prerequisite interrupts
+
 
 SCHEMA = """
 create table if not exists agent_run (
@@ -137,6 +142,9 @@ class AgentResult:
 
 
 STAGE_NOTES = {
+    "in_refinement": ("This is refinement. Product and Staff take turns on this ticket. Product shapes the work "
+                      "with the user's intent; Staff checks it technically. Staff moves the ticket to Ready for dev "
+                      "when the two agree. Until then, leave your reasons in a comment for the other agent."),
     "regression": ("This is the regression stage on dev. Run the regression against the dev app. "
                    "Approvals from earlier stages do not count here. If the regression passes, "
                    "call approve_ticket to record it. If it fails, flag_ticket with what failed."),
@@ -227,6 +235,21 @@ def run_agent(
     return AgentResult(key, stage, role, result)
 
 
+def refinement_role(conn: sqlite3.Connection, key: str) -> str:
+    """Whose turn it is in refinement: product goes first, then staff, and so on.
+
+    Staff moves the ticket out of refinement when the two agree. Until then each agent's
+    run hands the turn to the other, and MAX_REFINEMENT_ROUNDS caps the product rounds.
+    """
+    ensure_schema(conn)
+    last = conn.execute(
+        "select role from agent_run where key = ? and stage = 'in_refinement' order by id desc limit 1",
+        (key,)).fetchone()
+    if last is None or last["role"] == "staff":
+        return "product"
+    return "staff"
+
+
 def runs_at(conn: sqlite3.Connection, key: str, stage: str) -> int:
     """How many runs in a row have failed here (non-zero exit or timed out), most recent first.
 
@@ -264,6 +287,15 @@ def prod_ready(conn: sqlite3.Connection, key: str, repo: Path) -> bool:
     return True
 
 
+def _sql_list(values) -> str:
+    return "(" + ", ".join(f"'{v}'" for v in values) + ")"
+
+
+def unmet_blockers(conn: sqlite3.Connection, key: str, stage_of: dict[str, str]) -> list[str]:
+    """Prerequisites of this ticket that are not on dev yet."""
+    return [b for b in board.blockers(conn, key) if stage_of.get(b) not in DONE_FOR_BLOCKING]
+
+
 def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, dev_deployed=None) -> list[str]:
     """Move tickets along the steps that need no agent judgement. Returns the keys moved.
 
@@ -274,23 +306,32 @@ def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, dev_deployed=None)
     - a ticket in the active sprint's backlog is ready for development: it goes to ready_for_dev,
       and the dev agent takes it from there
     Deploying to prod is a person's step; nothing here moves a ticket past regression.
+    While work is paused, no ticket moves.
     """
-    from wf import observe
+    from wf import observe, pause
 
-    # One ticket at a time: a sprint ticket is only started once no other ticket is still in flight.
+    if pause.is_paused(conn):
+        return []
+
+    # A sprint ticket goes into refinement (product and staff agree the work) before a dev takes it.
     moved: list[str] = []
-    in_flight = conn.execute(
-        "select count(*) from ticket where removed_at is null and stage in ('ready_for_dev', 'in_dev', 'pr_open', "
-        "'pr_in_review', 'ready_for_perf_review', 'ready_for_qa', 'qa_approved', 'merged', 'regression', "
-        "'performance')").fetchone()[0]
-    if in_flight == 0:
-        nxt = conn.execute(
+    for row in conn.execute(
             "select t.key from ticket t join sprint s on s.id = t.sprint_id "
-            "where t.stage = 'backlog' and s.state = 'active' and t.removed_at is null and t.flags = '[]' "
-            "order by t.key limit 1").fetchone()
-        if nxt is not None:
-            board.move_stage(conn, nxt["key"], "ready_for_dev", "harness", "next in the active sprint: ready for development")
-            moved.append(nxt["key"])
+            "where t.stage = 'backlog' and s.state = 'active' and t.removed_at is null order by t.key").fetchall():
+        board.move_stage(conn, row["key"], "in_refinement", "harness", "in the active sprint: refine it")
+        moved.append(row["key"])
+
+    # A prerequisite sent back to dev pauses the work that depends on it.
+    for row in conn.execute(
+            "select distinct t.key, b.key as blocker from ticket t "
+            "join sprint s on s.id = t.sprint_id "
+            "join ticket_link l on l.ticket_key = t.key and l.link_type = 'is blocked by' "
+            "join ticket b on b.key = l.other_key "
+            f"where s.state = 'active' and t.removed_at is null and t.stage in {_sql_list(PAUSABLE)} "
+            "and b.stage = 'in_dev' order by t.key").fetchall():
+        board.move_stage(conn, row["key"], "ready_for_dev", "harness",
+                         f"paused: prerequisite {row['blocker']} was sent back to dev")
+        moved.append(row["key"])
 
     if dev_deployed is None:
         dev_deployed = lambda key: observe.dev_deployed(conn, key)  # noqa: E731
@@ -358,38 +399,74 @@ def tick(
 ) -> list[dict]:
     """One pass over the board: run the role for each ticket that needs one.
 
-    A ticket is picked up when it is in an active sprint, not flagged, in a stage with a
-    role, and that stage has had fewer than MAX_RUNS_PER_STAGE runs. dry_run lists the
-    work without running it.
+    Work order: a ticket already in development first (a kicked-back one), then ready tickets in
+    the sprint's work order (unordered last). One dev at a time: a ready ticket is picked up only
+    when no ticket is in development, and only when its prerequisites are on dev. A ticket in
+    refinement gets at most MAX_REFINEMENT_ROUNDS product rounds before a person is asked.
+    dry_run lists the work without running it. While work is paused, nothing is listed or run.
     """
+    from wf import pause
+
+    if pause.is_paused(conn):
+        return []
     ensure_schema(conn)
     rows = conn.execute(
-        """select t.key, t.stage, t.flags, s.state as sprint_state
+        """select t.key, t.stage, t.flags, t.sort_order, s.state as sprint_state
              from ticket t left join sprint s on s.id = t.sprint_id
-            where t.removed_at is null and t.stage is not null
-            order by t.key"""
+            where t.removed_at is null and t.stage is not null"""
     ).fetchall()
+    stage_of = {r["key"]: r["stage"] for r in rows}
+    dev_busy = next((r["key"] for r in rows if r["stage"] == "in_dev" and r["sprint_state"] == "active"), None)
+    order = sorted(rows, key=lambda r: (r["stage"] != "in_dev", r["sort_order"] is None,
+                                        r["sort_order"] or 0, r["key"]))
     actions: list[dict] = []
-    for row in rows:
-        role = STAGE_ROLE.get(row["stage"])
+    for row in order:
+        key, stage = row["key"], row["stage"]
+        role = STAGE_ROLE.get(stage)
+        if stage in REFINEMENT_STAGES:
+            role = refinement_role(conn, key)  # refinement alternates; the round limit below ends it
         if role is None or row["sprint_state"] != "active" or json.loads(row["flags"] or "[]"):
             continue
-        if _finished_and_unchanged(conn, row["key"], row["stage"]):
+        if stage not in REFINEMENT_STAGES and _finished_and_unchanged(conn, key, stage):
             continue  # the last run here succeeded and nothing has changed since: wait for a change
-        if runs_at(conn, row["key"], row["stage"]) >= MAX_RUNS_PER_STAGE:
-            actions.append({"key": row["key"], "stage": row["stage"], "role": role,
-                            "skipped": "run limit reached for this stage; needs a human"})
+        action = {"key": key, "stage": stage, "role": role, "skipped": None}
+        if stage in REFINEMENT_STAGES:
+            rounds = conn.execute("select count(*) from agent_run where key = ? and role = 'product'",
+                                  (key,)).fetchone()[0]
+            if rounds >= MAX_REFINEMENT_ROUNDS:
+                action["skipped"] = f"{rounds} refinement rounds without agreement; needs a human"
+                if not dry_run:
+                    board.set_flag(conn, key, "needs-human", "harness", action["skipped"], clock=clock)
+                actions.append(action)
+                continue
+        elif runs_at(conn, key, stage) >= MAX_RUNS_PER_STAGE:
+            action["skipped"] = "run limit reached for this stage; needs a human"
+            actions.append(action)
             continue
-        action = {"key": row["key"], "stage": row["stage"], "role": role, "skipped": None}
+        if stage == "ready_for_dev":
+            if dev_busy is not None:
+                action["skipped"] = f"dev is busy with {dev_busy}"
+                actions.append(action)
+                continue
+            waiting = unmet_blockers(conn, key, stage_of)
+            if waiting:
+                action["skipped"] = f"waiting for {', '.join(waiting)} to merge to dev"
+                actions.append(action)
+                continue
+        if stage == "in_dev" and dev_busy != key:
+            action["skipped"] = f"dev is busy with {dev_busy}"
+            actions.append(action)
+            continue
         if not dry_run:
-            if row["stage"] == "ready_for_dev":
-                # Dev pickup: the dev role takes the ticket to in_dev before it works on it.
-                board.move_stage(conn, row["key"], "in_dev", "dev", "dev pickup")
+            if stage == "ready_for_dev":
+                board.move_stage(conn, key, "in_dev", "dev", "dev pickup")
                 action["stage"] = "in_dev"
-            res = run_agent(conn, role, row["key"], repo=repo, runs_dir=runs_dir, access=access,
+            res = run_agent(conn, role, key, repo=repo, runs_dir=runs_dir, access=access,
                             model=model, test_cmd=test_cmd, app_cmd=app_cmd, app_url=app_url, claude_bin=claude_bin, runner=runner, clock=clock,
                             regression_url=regression_url,
                             bot_domain=bot_domain, bot_credentials=bot_credentials)
             action["exit_code"] = res.run.exit_code if res.run else None
+        if stage == "ready_for_dev":
+            dev_busy = key  # the dev holds this ticket now; no other ready ticket starts this pass
         actions.append(action)
     return actions

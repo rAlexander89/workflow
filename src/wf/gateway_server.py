@@ -29,12 +29,36 @@ from wf import board
 
 PROTOCOL = "2024-11-05"
 
+# Sign-up pages create accounts. QA never needs them, so fetch_local refuses them.
+SIGNUP_SEGMENTS = ("register", "signup", "sign-up", "sign_up")
+
+
+def is_signup_path(path: str) -> bool:
+    """True when a path points at a sign-up page.
+
+    Decodes percent-escapes and resolves `..` first, so /%72egister and /login/../register
+    are caught as well as /register/ and /register?x=1.
+    """
+    import posixpath
+    from urllib.parse import unquote
+
+    clean = unquote(path.split("?", 1)[0].split("#", 1)[0])
+    normal = posixpath.normpath("/" + clean.lstrip("/"))
+    first = normal.strip("/").split("/", 1)[0].lower()
+    return first in SIGNUP_SEGMENTS
+
 TOOLS: list[dict[str, Any]] = [
     {"name": "get_ticket", "description": "Read the ticket this run is working on.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "move_ticket", "description": "Move the ticket to an internal stage allowed for this role.",
      "inputSchema": {"type": "object", "required": ["stage", "reason"],
                      "properties": {"stage": {"type": "string"}, "reason": {"type": "string"}}}},
+    {"name": "link_blocking", "description": "Staff only: say that this ticket must wait for another ticket to merge to dev. Adds a Blocks link in Jira.",
+     "inputSchema": {"type": "object", "required": ["prerequisite", "reason"],
+                     "properties": {"prerequisite": {"type": "string"}, "reason": {"type": "string"}}}},
+    {"name": "set_order", "description": "Staff only: this ticket's place in the sprint's work order. Lower goes first.",
+     "inputSchema": {"type": "object", "required": ["position"],
+                     "properties": {"position": {"type": "integer"}}}},
     {"name": "flag_ticket", "description": "Flag the ticket for a human (needs-human or blocked).",
      "inputSchema": {"type": "object", "required": ["flag", "reason"],
                      "properties": {"flag": {"type": "string", "enum": ["needs-human", "blocked"]},
@@ -106,6 +130,22 @@ class Gateway:
         finally:
             conn.close()
         return {"moved_to": args["stage"]}
+
+    def link_blocking(self, args: dict) -> dict:
+        conn = board.connect(self.scope.db)
+        try:
+            board.add_block(conn, args["prerequisite"], self.scope.key, self.scope.role, args["reason"])
+        finally:
+            conn.close()
+        return {"linked": args["prerequisite"]}
+
+    def set_order(self, args: dict) -> dict:
+        conn = board.connect(self.scope.db)
+        try:
+            board.set_order(conn, self.scope.key, int(args["position"]), self.scope.role)
+        finally:
+            conn.close()
+        return {"position": int(args["position"])}
 
     def flag_ticket(self, args: dict) -> dict:
         conn = board.connect(self.scope.db)
@@ -246,6 +286,8 @@ class Gateway:
         else:
             base = f"http://127.0.0.1:{self._port}"
         path = args["path"] if args["path"].startswith("/") else "/" + args["path"]
+        if is_signup_path(path):
+            raise ValueError("sign-up pages are not part of QA; the bot only signs in with bot_login")
         url = f"{base}{path}"
         try:
             with urllib.request.urlopen(url, timeout=10) as resp:

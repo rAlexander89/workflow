@@ -464,13 +464,13 @@ def test_unknown_actor_is_refused(conn):
 
 def test_workflow_statuses_survive_a_sync_without_tickets_in_them(conn):
     sync(conn, payload(projects=[{**PROJECT, "statuses": STATUSES + [
-        {"name": "Needs refinement", "category": "new", "source": "workflow"}]}], tickets=[]))
+        {"name": "Triage", "category": "new", "source": "workflow"}]}], tickets=[]))
     fresh = payload(projects=[{**PROJECT, "statuses": [{"name": "Ready for dev", "category": "new",
                                                        "source": "observed"}]}], tickets=[])
     board.carry_workflow_statuses(conn, fresh)
     sync(conn, fresh)
     names = {r["name"] for r in conn.execute("select name from project_status where project_key='ABC'")}
-    assert "Needs refinement" in names
+    assert "Triage" in names
 
 
 def test_assignee_name_and_links_are_stored(conn):
@@ -489,3 +489,46 @@ def test_a_status_named_open_is_the_to_do_stage(conn):
     assert _b._stage_for(conn, "ABC", "Open") == "backlog"
     assert _b._stage_for(conn, "ABC", "Backlog") == "backlog"
     assert _b._stage_for(conn, "ABC", "PR open") == "pr_open"
+
+
+def test_connect_moves_tickets_from_the_removed_refinement_stage(tmp_path):
+    p = tmp_path / "wf.sqlite"
+    c = board.connect(p)
+    sync(c, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
+    c.execute("update ticket set stage = 'needs_refinement' where key = 'ABC-1'")
+    c.commit()
+    c.close()
+    again = board.connect(p)
+    assert again.execute("select stage from ticket where key = 'ABC-1'").fetchone()[0] == "in_refinement"
+    again.close()
+
+
+def test_status_to_stage_ignores_mapping_rows_for_removed_stages(conn):
+    sync(conn, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
+    conn.execute("insert into project_status (project_key, name, category, source) "
+                 "values ('ABC', 'Needs refinement', 'new', 'workflow')")
+    conn.execute("insert into stage_mapping (project_key, stage, status_name, reason) "
+                 "values ('ABC', 'needs_refinement', 'Needs refinement', 'old row')")
+    conn.commit()
+    assert "Needs refinement" not in board.status_to_stage(conn)
+
+
+def test_a_block_is_stored_both_ways_and_waits_to_be_sent_to_jira(conn):
+    sync(conn, payload(tickets=[ticket("ABC-1"), ticket("ABC-2")]))
+    board.add_block(conn, "ABC-1", "ABC-2", actor="staff", reason="needs the button")
+    assert board.blockers(conn, "ABC-2") == ["ABC-1"]
+    assert board.pending_links(conn) == [("ABC-1", "ABC-2")]
+    board.mark_linked(conn, [("ABC-1", "ABC-2")])
+    assert board.pending_links(conn) == []
+
+
+def test_a_ticket_cannot_block_itself(conn):
+    sync(conn, payload(tickets=[ticket("ABC-1")]))
+    with pytest.raises(board.BoardError):
+        board.add_block(conn, "ABC-1", "ABC-1", actor="staff", reason="x")
+
+
+def test_set_order_records_the_position(conn):
+    sync(conn, payload(tickets=[ticket("ABC-1")]))
+    board.set_order(conn, "ABC-1", 3, actor="staff")
+    assert conn.execute("select sort_order from ticket where key = 'ABC-1'").fetchone()[0] == 3

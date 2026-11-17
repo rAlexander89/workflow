@@ -46,3 +46,29 @@ def test_ticket_timeline_shows_stages_and_next_role(client):
     r = client.get("/board/ticket/ABC-1")
     assert r.status_code == 200
     assert "Ready for dev" in r.text and "Run dev" not in r.text  # runs are automatic
+
+
+def test_pause_button_pauses_and_resume_restores(client):
+    assert "Pause work" in client.get("/agents").text
+    r = client.post("/agents/pause", follow_redirects=False)
+    assert r.status_code == 303
+    page = client.get("/agents").text
+    assert "Work is paused" in page and "Resume work" in page
+    assert "work paused" in client.get("/agents/state").text
+
+    client.post("/agents/resume", follow_redirects=False)
+    page = client.get("/agents").text
+    assert "Work is running" in page and "Pause work" in page
+
+
+def test_a_paused_pass_starts_nothing(client):
+    client.post("/agents/pause", follow_redirects=False)
+    client.post("/agents/tick", follow_redirects=False)
+    assert "work is paused" in client.get("/agents/state").text
+
+
+def test_a_paused_ticket_run_starts_nothing(client):
+    client.post("/agents/pause", follow_redirects=False)
+    r = client.post("/agents/run/ABC-1", follow_redirects=False)
+    assert r.status_code == 303
+    assert "ABC-1: work is paused" in client.get("/agents/state").text

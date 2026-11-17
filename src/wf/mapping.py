@@ -20,7 +20,6 @@ from dataclasses import dataclass
 # status name (lowercase, punctuation replaced by spaces).
 STAGE_PATTERNS: list[tuple[str, str]] = [
     ("backlog", r"\bbacklog\b|^open$|^to do$"),
-    ("needs_refinement", r"\bneeds refinement\b|\bto refine\b"),
     ("in_refinement", r"\bin refinement\b"),
     ("hotfix_review", r"\bhotfix review\b"),
     ("ready_for_dev", r"\bready for dev\b|\bready for development\b|\bselected for development\b"),

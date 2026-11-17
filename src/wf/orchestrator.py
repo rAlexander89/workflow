@@ -33,7 +33,6 @@ MAX_DISPATCHES_PER_STATUS = 10  # loop guard; a ticket bouncing this often needs
 #   "harness:merge" the harness merges to the internal main once both approvals exist
 STAGE_OWNERS: dict[str, str | None] = {
     "backlog": None,
-    "needs_refinement": "product",
     "in_refinement": "planning",
     "hotfix_review": "planning",
     "ready_for_dev": "dev",

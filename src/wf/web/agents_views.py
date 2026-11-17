@@ -18,7 +18,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from wf import agents, board, github_webhook, jira_webhook
+from wf import agents, board, github_webhook, jira_webhook, pause
 from wf import config as cfgmod
 from wf import claude_run, github_agent, jira_session, merge, outbox
 from wf.web import pipeline as stage_view
@@ -123,6 +123,9 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                     where t.removed_at is null and t.stage is not null
                     order by t.key""").fetchall()
             queued = conn.execute("select count(*) from outbox where kind='transition' and status='pending'").fetchone()[0]
+            paused = pause.is_paused(conn)
+            paused_at = pause.paused_since(conn)
+            paused_text = time.strftime("%H:%M", time.localtime(paused_at)) if paused_at else ""
             by_stage: dict[str, list[dict]] = {}
             for r in rows:
                 last = conn.execute(
@@ -149,7 +152,8 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                             "tickets": by_stage.get(st["name"], [])})
         with _lock:
             state = {"running": _state["running"], "last": _state["last"], "log": list(_state["log"])}
-        return {"columns": columns, "queued": queued, "state": state, "repos": c.repos,
+        return {"columns": columns, "queued": queued, "paused": paused, "paused_text": paused_text,
+                "state": state, "repos": c.repos,
                 "access": c.model.claude_code_access, "test_cmd": c.agents.test_cmd,
                 "model": c.agents.model, "runs_dir": str(_runs_dir(c))}
 
@@ -196,10 +200,39 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             conn.close()
         return any(not a.get("skipped") for a in actions)
 
+    @app.post("/agents/pause")
+    def pause_work(request: Request):
+        conn = board.connect(db_path)
+        try:
+            changed = pause.pause(conn)
+        finally:
+            conn.close()
+        _log("work paused: no new run or stage move starts; a run already in progress finishes"
+             if changed else "work was already paused")
+        return RedirectResponse("/agents", status_code=303)
+
+    @app.post("/agents/resume")
+    def resume_work(request: Request):
+        conn = board.connect(db_path)
+        try:
+            changed = pause.resume(conn)
+        finally:
+            conn.close()
+        _log("work resumed" if changed else "work was not paused")
+        _wake.set()  # the auto loop picks the board up right away
+        return RedirectResponse("/agents", status_code=303)
+
     @app.post("/agents/tick")
     def run_pass(request: Request):
         c = settings()
-        if not c.repos:
+        conn = board.connect(db_path)
+        try:
+            paused = pause.is_paused(conn)
+        finally:
+            conn.close()
+        if paused:
+            _log("work is paused: resume it before starting a pass")
+        elif not c.repos:
             _log("no repo is linked: add one on the Links page first")
         elif not _start("one pass", pass_work(c)):
             _log("a pass is already running")
@@ -247,6 +280,12 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             _wake.clear()
             try:
                 c = settings()
+                conn = board.connect(db_path)
+                try:
+                    if pause.is_paused(conn):
+                        continue  # paused: no Jira, merge, GitHub, or agent work starts
+                finally:
+                    conn.close()
                 if _jira_changed.is_set() and c.model.claude_code_access:
                     _jira_changed.clear()
                     if not _start("jira sync", _jira_sync_work(c)):
@@ -267,6 +306,21 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                     finally:
                         conn.close()
                 observe_tick(c)
+                conn = board.connect(db_path)
+                try:
+                    pending = board.pending_links(conn)
+                finally:
+                    conn.close()
+                if pending and c.model.claude_code_access:
+                    def link_work(pairs=pending):
+                        linked = jira_session.create_blocking_links(pairs, **_session_kw(c))
+                        conn2 = board.connect(db_path)
+                        try:
+                            board.mark_linked(conn2, linked)
+                        finally:
+                            conn2.close()
+                        _log(f"linked in Jira: {', '.join(f'{p} blocks {d}' for p, d in linked)}")
+                    _start("link tickets in Jira", link_work)
                 conn = board.connect(db_path)
                 try:
                     moved = agents.advance_pipeline(conn, repo=_repo_path(c, None))
@@ -293,6 +347,14 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
     @app.post("/agents/run/{key}")
     def run_one(key: str):
         c = settings()
+        conn = board.connect(db_path)
+        try:
+            paused = pause.is_paused(conn)
+        finally:
+            conn.close()
+        if paused:
+            _log(f"{key}: work is paused: resume it before running an agent")
+            return RedirectResponse(f"/board/ticket/{key}", status_code=303)
 
         def work():
             conn = board.connect(db_path)

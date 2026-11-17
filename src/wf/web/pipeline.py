@@ -6,8 +6,7 @@ from wf import agents, mapping
 
 STAGE_INFO: dict[str, tuple[str, str]] = {
     "backlog": ("To do", "Not started"),
-    "needs_refinement": ("Needs refinement", "Product"),
-    "in_refinement": ("In refinement", "Staff"),
+    "in_refinement": ("In refinement", "Product and Staff"),
     "hotfix_review": ("Hotfix review", "Staff"),
     "ready_for_dev": ("Ready for dev", "Dev"),
     "in_dev": ("In development", "Dev"),
@@ -125,7 +124,7 @@ def flow_states(stage: str | None, *, last_run_failed: bool, perf_requested: boo
     return out
 
 
-IN_PROGRESS_STAGES = {"backlog", "needs_refinement", "in_refinement", "hotfix_review", "ready_for_dev", "in_dev",
+IN_PROGRESS_STAGES = {"backlog", "in_refinement", "hotfix_review", "ready_for_dev", "in_dev",
                       "pr_open", "pr_in_review", "ready_for_perf_review", "ready_for_qa", "qa_approved"}
 DEVELOPMENT_STAGES = {"merged", "regression", "performance"}
 

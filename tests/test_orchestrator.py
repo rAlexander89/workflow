@@ -6,7 +6,6 @@ from wf.orchestrator import LifecycleStore, Supervisor, route
 # Test data only. In a real run the mapping comes from the board, per team.
 MAPPING = {
     "Backlog": "backlog",
-    "Needs refinement": "needs_refinement",
     "In refinement": "in_refinement",
     "Hotfix review": "hotfix_review",
     "Ready for dev": "ready_for_dev",
@@ -29,7 +28,6 @@ def change(status, key="ENG-1", frm="x"):
     "status, action, owner",
     [
         ("Backlog", "none", None),
-        ("Needs refinement", "dispatch", "product"),
         ("In refinement", "dispatch", "planning"),
         ("Ready for dev", "dispatch", "dev"),
         ("Dev in progress", "dispatch", "dev"),
