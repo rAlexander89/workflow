@@ -516,3 +516,37 @@ def test_pause_is_idempotent_and_reports_state(conn):
     assert pause.resume(conn, clock=lambda: 7) is True
     assert pause.resume(conn, clock=lambda: 8) is False
     assert pause.paused_since(conn) is None
+
+
+def test_idle_reason_explains_a_finished_stage_and_offers_a_rerun(conn):
+    _set_stage(conn, "in_dev")
+    conn.execute("insert into agent_run (key, stage, role, started_at, exit_code, timed_out, output_path) "
+                 "values ('ABC-1', 'in_dev', 'dev', 4102444800, 0, 0, 'x')")  # after every event the fixture wrote
+    conn.commit()
+    reason = agents.idle_reason(conn, "ABC-1")
+    assert reason["can_run"] is True
+    assert "finished its last run" in reason["why"]
+
+
+def test_idle_reason_says_what_blocks_a_ticket(conn):
+    _set_stage(conn, "in_dev")
+    conn.execute("update ticket set flags = '[\"needs-human\"]' where key = 'ABC-1'")
+    conn.commit()
+    reason = agents.idle_reason(conn, "ABC-1")
+    assert reason["can_run"] is False and "needs-human" in reason["why"]
+
+    conn.execute("update ticket set flags = '[]' where key = 'ABC-1'")
+    conn.execute("update sprint set state = 'closed'")
+    conn.commit()
+    reason = agents.idle_reason(conn, "ABC-1")
+    assert reason["can_run"] is False and "active sprint" in reason["why"]
+
+
+def test_idle_reason_is_none_when_the_next_pass_will_pick_it_up(conn):
+    _set_stage(conn, "ready_for_dev")
+    assert agents.idle_reason(conn, "ABC-1") is None
+
+
+def test_a_done_ticket_has_no_stall_notice(conn):
+    _set_stage(conn, "deployed")
+    assert agents.idle_reason(conn, "ABC-1") is None

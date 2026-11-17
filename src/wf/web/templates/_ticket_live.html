@@ -1,0 +1,5 @@
+{% if running %}<div class="callout" style="border-color:var(--ok);background:var(--ok-bg)"><b style="color:var(--ok)">Running now</b> {{ running }}. The result shows here and in the Activity log when it finishes.</div>{% endif %}
+{% if other %}<div class="muted" style="margin:8px 0">Another action is running: {{ other }}.</div>{% endif %}
+{% if idle %}<div class="callout" style="border-color:var(--warn);background:var(--warn-bg)"><b style="color:var(--warn)">Not moving</b> {{ idle.why }}
+{% if idle.can_run %}<form method="post" action="/agents/run/{{ ticket.key }}" style="margin-top:8px"><button {% if running or other %}disabled{% endif %}>Run again</button></form>{% endif %}
+</div>{% endif %}

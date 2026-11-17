@@ -53,6 +53,10 @@ def runner_headers(url: str, role: str, secret: str, secret_host: str) -> dict[s
 # Sign-up pages create accounts. QA never needs them, so fetch_local refuses them.
 SIGNUP_SEGMENTS = ("register", "signup", "sign-up", "sign_up")
 
+# fetch_local returns this many bytes of a body. Big enough for a stylesheet or a page, so QA can read
+# the whole thing (a media query near the end of a CSS file used to be cut off at 4,000 bytes).
+MAX_FETCH_BYTES = 512 * 1024
+
 
 def is_signup_path(path: str) -> bool:
     """True when a path points at a sign-up page.
@@ -315,9 +319,9 @@ class Gateway:
         req = urllib.request.Request(url, headers=self._runner_headers(url))
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
-                return {"status": resp.status, "body": resp.read(4000).decode(errors="replace")}
+                return {"status": resp.status, "body": resp.read(MAX_FETCH_BYTES).decode(errors="replace")}
         except urllib.error.HTTPError as e:
-            return {"status": e.code, "body": e.read(4000).decode(errors="replace")}
+            return {"status": e.code, "body": e.read(MAX_FETCH_BYTES).decode(errors="replace")}
 
     def stop_app(self, _args: dict) -> dict:
         self._external = None  # an app we only borrowed is never stopped

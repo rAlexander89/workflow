@@ -194,3 +194,17 @@ def test_scope_reads_the_runner_secret_and_its_host_from_the_environment():
     s = gateway_server.Scope({"WF_ROLE": "qa", "WF_KEY": "ABC-1", "WF_RUNNER_SECRET": "x",
                               "WF_RUNNER_SECRET_HOST": "dev.fokist.com"})
     assert s.runner_secret == "x" and s.runner_secret_host == "dev.fokist.com"
+
+
+def test_fetch_local_returns_a_whole_stylesheet_not_just_the_first_4000_bytes(db, tmp_path):
+    site = tmp_path / "site"
+    site.mkdir()
+    css = "a{color:red}\n" * 1000 + "@media (max-width: 768px) { .site-title { display: block; } }\n"
+    (site / "styles.css").write_text(css)
+    g = app_gw(db, site, "python3 -m http.server {port} --bind 127.0.0.1")
+    try:
+        call(g, "start_app")
+        out = json.loads(call(g, "fetch_local", {"path": "/styles.css"})["content"][0]["text"])
+        assert out["status"] == 200 and "max-width: 768px" in out["body"]
+    finally:
+        call(g, "stop_app")

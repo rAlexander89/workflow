@@ -36,13 +36,10 @@
   </div>
 </div>
 
-<div class="pipe" hx-get="/agents/state" hx-trigger="every 4s" hx-swap="none"></div>
-<div id="board" hx-get="/agents/board" hx-trigger="every 4s" hx-swap="innerHTML">
-  {% include "_board.html" %}
-</div>
+{% include "_board.html" %}
 
 <h2>Activity</h2>
-<div class="panel" hx-get="/agents/state" hx-trigger="every 4s" hx-target="this" hx-swap="innerHTML">
+<div class="panel" id="activity">
   {% include "_agents_state.html" %}
 </div>
 

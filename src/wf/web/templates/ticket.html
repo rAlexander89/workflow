@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ ticket.key }}{% endblock %}
 {% block content %}
-<div id="ticket-status" hx-get="/board/ticket/{{ ticket.key }}" hx-trigger="every 4s" hx-select="#ticket-status" hx-swap="outerHTML">
+<div id="ticket-status">
 <style>
   .head { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; }
   .strip { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 4px; }
@@ -34,6 +34,8 @@
   @media (max-width:760px) { .cols { grid-template-columns:1fr; } }
 </style>
 
+{% if notice %}<div class="callout" style="border-color:var(--accent);background:var(--panel)">{{ notice }}</div>{% endif %}
+<div id="ticket-live" data-key="{{ ticket.key }}"></div>
 <div class="head">
   <div>
     <div class="muted"><a href="/agents">Pipeline</a> / {{ ticket.key }}</div>
@@ -88,7 +90,7 @@
 <div class="cols">
   <div>
     <h2>Internal pull request</h2>
-    <div hx-get="/board/ticket/{{ ticket.key }}/pr-card" hx-trigger="load, every 20s" hx-swap="innerHTML">
+    <div hx-get="/board/ticket/{{ ticket.key }}/pr-card" hx-trigger="load" hx-swap="innerHTML">
       <div class="muted">Loading…</div>
     </div>
 
@@ -126,7 +128,7 @@
   <div>
     <h2>Deploy to dev</h2>
     <div class="panel" id="deploy-panel" hx-get="/board/ticket/{{ ticket.key }}/deploy-panel"
-         hx-trigger="load, every 10s" hx-swap="innerHTML">
+         hx-trigger="load" hx-swap="innerHTML">
       <div class="muted">Loading the deploy…</div>
     </div>
 
@@ -145,7 +147,7 @@
     </div>
     {% endif %}
 
-    <div id="ticket-history" hx-get="/board/ticket/{{ ticket.key }}" hx-trigger="every 4s" hx-select="#ticket-history" hx-swap="outerHTML">
+    <div id="ticket-history">
     <h2>History</h2>
     <div class="panel">
       {% for e in events[:12] %}
