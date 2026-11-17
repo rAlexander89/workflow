@@ -352,10 +352,7 @@ def _finished_and_unchanged(conn: sqlite3.Connection, key: str, stage: str) -> b
     last = _runs(conn).last_run(key, stage)
     if last is None or last["timed_out"] or last["exit_code"] != 0:
         return False
-    changed = conn.execute(
-        "select 1 from ticket_event where ticket_key = ? and at >= ? and actor != ? limit 1",
-        (key, last["started_at"], last["role"])).fetchone()
-    return changed is None
+    return not board.changed_since(conn, key, last["started_at"], last["role"])
 
 
 def idle_reason(conn: sqlite3.Connection, key: str) -> dict | None:

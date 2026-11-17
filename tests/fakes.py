@@ -165,3 +165,103 @@ class MemoryAgentRuns:
     def last_exit_code(self, key, role=None):
         rows = [r for r in reversed(self._rows) if r["key"] == key and (role is None or r["role"] == role)]
         return rows[0]["exit_code"] if rows else None
+
+
+import copy  # noqa: E402
+
+from wf.domain.board.events import TicketEvent  # noqa: E402
+from wf.domain.board.ticket import Ticket  # noqa: E402
+
+
+class MemoryBoardState:
+    def __init__(self):
+        self.tickets: dict[str, Ticket] = {}
+        self.history: dict[str, list[TicketEvent]] = {}
+        self.comments: list[dict] = []
+        self.links: list[list] = []  # [prerequisite, dependent, synced]
+        self.mappings: dict[tuple[str, str], str] = {}
+        self.outbox: list[dict] = []
+
+    def add_ticket(self, key, stage, project_key="P", **kw):
+        self.tickets[key] = Ticket(key, project_key, stage, **kw)
+        self.history.setdefault(key, [])
+
+
+class MemoryTicketRepository:
+    def __init__(self, state: MemoryBoardState):
+        self._s = state
+
+    def get(self, key):
+        t = self._s.tickets.get(key)
+        return None if t is None else Ticket(t.key, t.project_key, t.stage, list(t.flags), t.removed,
+                                             t.sort_order, t.jira_status)
+
+    def save(self, ticket):
+        self._s.tickets[ticket.key] = Ticket(ticket.key, ticket.project_key, ticket.stage, list(ticket.flags),
+                                             ticket.removed, ticket.sort_order, ticket.jira_status)
+        self._s.history.setdefault(ticket.key, []).extend(ticket.events)
+        ticket.events.clear()
+
+    def history(self, key):
+        return list(self._s.history.get(key, []))
+
+    def add_comment(self, key, origin, author, body, at):
+        self._s.comments.append({"key": key, "origin": origin, "author": author, "body": body, "at": at})
+        return len(self._s.comments)
+
+    def link_blocks(self, prerequisite, dependent):
+        if not any(l[0] == prerequisite and l[1] == dependent for l in self._s.links):
+            self._s.links.append([prerequisite, dependent, 0])
+
+    def blockers(self, key):
+        return sorted(l[0] for l in self._s.links if l[1] == key)
+
+    def pending_links(self):
+        return sorted((l[0], l[1]) for l in self._s.links if l[2] == 0)
+
+    def mark_linked(self, pairs):
+        for l in self._s.links:
+            if (l[0], l[1]) in pairs:
+                l[2] = 1
+
+
+class MemoryStageMappings:
+    def __init__(self, state: MemoryBoardState):
+        self._s = state
+
+    def status_for(self, project_key, stage):
+        return self._s.mappings.get((project_key, stage))
+
+
+class MemoryOutboxQueue:
+    def __init__(self, state: MemoryBoardState):
+        self._s = state
+
+    def enqueue_transition(self, ticket_key, stage, actor, now):
+        for row in self._s.outbox:
+            if row["ticket_key"] == ticket_key and row["status"] == "pending":
+                row["status"] = "superseded"
+        row = {"id": len(self._s.outbox) + 1, "ticket_key": ticket_key, "target_stage": stage, "actor": actor,
+               "status": "pending", "created_at": now}
+        self._s.outbox.append(row)
+        return row["id"]
+
+
+class MemoryBoardUnitOfWork:
+    """Rolls the state back if the block raises, like a database transaction."""
+
+    def __init__(self, state: MemoryBoardState):
+        self.state = state
+        self.tickets = MemoryTicketRepository(state)
+        self.mappings = MemoryStageMappings(state)
+        self.outbox = MemoryOutboxQueue(state)
+        self._snapshot = None
+
+    def __enter__(self):
+        self._snapshot = copy.deepcopy(self.state.__dict__)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is not None:
+            self.state.__dict__.clear()
+            self.state.__dict__.update(self._snapshot)

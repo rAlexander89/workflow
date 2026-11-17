@@ -30,6 +30,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from wf import mapping
+from wf.adapters.persistence.sqlite.board import SqliteBoardUnitOfWork
+from wf.application.board.tickets import TicketCommands
+from wf.domain.board.errors import BoardError  # noqa: F401
 from wf.domain.board.moves import ALLOWED_MOVES, FLAGS, may_move  # noqa: F401
 
 SCHEMA_VERSION = 1
@@ -178,8 +181,11 @@ STATUS_CATEGORIES = ("new", "indeterminate", "done")
 SYNC_KINDS = ("active", "past", "backlog")
 
 
-class BoardError(ValueError):
-    pass
+
+
+def _commands(conn: sqlite3.Connection, clock: Callable[[], float] = time.time) -> TicketCommands:
+    """Ticket commands over this connection. The legacy functions below call them."""
+    return TicketCommands(lambda: SqliteBoardUnitOfWork(conn), clock)
 
 
 # --- connection and schema -----------------------------------------------------
@@ -603,25 +609,7 @@ def last_sync(conn: sqlite3.Connection) -> sqlite3.Row | None:
 def move_stage(conn: sqlite3.Connection, key: str, stage: str, actor: str, reason: str,
                clock: Callable[[], float] = time.time) -> None:
     """Move a ticket to an internal stage. Only the stage's mapped status is allowed."""
-    if stage not in mapping.STAGES:
-        raise BoardError(f"unknown stage {stage!r}; choose one of {', '.join(mapping.STAGES)}")
-    row = conn.execute("select * from ticket where key = ?", (key,)).fetchone()
-    if row is None:
-        raise BoardError(f"no ticket {key}")
-    if row["removed_at"] is not None:
-        raise BoardError(f"{key} is no longer in scope; it cannot be moved")
-    # A stage with no Jira column is internal-only: the move is recorded on the board, and
-    # enqueue_transition queues nothing for Jira. Nothing outside the board changes.
-    if row["stage"] == stage:
-        return
-    if not may_move(actor, row["stage"], stage):
-        raise BoardError(
-            f"{actor!r} may not move {key} from {row['stage'] or '(no stage)'} to {stage!r}"
-        )
-    with conn:
-        conn.execute("update ticket set stage = ? where key = ?", (stage, key))
-        _event(conn, key, int(clock()), actor, "stage", row["stage"], stage, reason)
-        enqueue_transition(conn, key, stage, actor, int(clock()))
+    _commands(conn, clock).move_stage(key, stage, actor, reason)
 
 
 def enqueue_transition(conn: sqlite3.Connection, key: str, stage: str, actor: str, now: int) -> int | None:
@@ -630,58 +618,19 @@ def enqueue_transition(conn: sqlite3.Connection, key: str, stage: str, actor: st
     Returns None when the stage has no mapped Jira status (nothing to push). A newer
     move supersedes older pending moves for the same ticket.
     """
-    row = conn.execute("select project_key from ticket where key = ?", (key,)).fetchone()
-    target = conn.execute(
-        "select status_name from stage_mapping where project_key = ? and stage = ? and status_name is not null",
-        (row["project_key"], stage),
-    ).fetchone()
-    if target is None:
-        return None
-    cur = conn.execute(
-        "insert into outbox (created_at, ticket_key, kind, target_stage, actor, status) "
-        "values (?, ?, 'transition', ?, ?, 'pending')",
-        (now, key, stage, actor),
-    )
-    conn.execute(
-        "update outbox set status = 'superseded', updated_at = ? "
-        "where ticket_key = ? and kind = 'transition' and status = 'pending' and id != ?",
-        (now, key, cur.lastrowid),
-    )
-    return cur.lastrowid
+    return _commands(conn, lambda: now).queue_transition(key, stage, actor)
 
 
 def set_flag(conn: sqlite3.Connection, key: str, flag: str, actor: str, reason: str,
              clock: Callable[[], float] = time.time) -> None:
     """Flag a ticket for a human. Agents set flags. Only the user clears them."""
-    if flag not in FLAGS:
-        raise BoardError(f"flag must be one of {FLAGS}")
-    row = conn.execute("select flags from ticket where key = ?", (key,)).fetchone()
-    if row is None:
-        raise BoardError(f"no ticket {key}")
-    flags = json.loads(row["flags"])
-    if flag in flags:
-        return
-    flags.append(flag)
-    with conn:
-        conn.execute("update ticket set flags = ? where key = ?", (json.dumps(flags), key))
-        _event(conn, key, int(clock()), actor, "flag", None, flag, reason)
+    _commands(conn, clock).set_flag(key, flag, actor, reason)
 
 
 def clear_flag(conn: sqlite3.Connection, key: str, flag: str, actor: str,
                clock: Callable[[], float] = time.time) -> None:
     """Clear a flag. Only the user can do this."""
-    if actor != "user":
-        raise BoardError("only the user can clear a flag")
-    row = conn.execute("select flags from ticket where key = ?", (key,)).fetchone()
-    if row is None:
-        raise BoardError(f"no ticket {key}")
-    flags = json.loads(row["flags"])
-    if flag not in flags:
-        return
-    flags.remove(flag)
-    with conn:
-        conn.execute("update ticket set flags = ? where key = ?", (json.dumps(flags), key))
-        _event(conn, key, int(clock()), actor, "unflag", flag, None, None)
+    _commands(conn, clock).clear_flag(key, flag, actor)
 
 
 def status(conn: sqlite3.Connection, now: float) -> dict:
@@ -701,38 +650,18 @@ def status(conn: sqlite3.Connection, now: float) -> dict:
 def add_comment(conn: sqlite3.Connection, key: str, author: str, body: str,
                 clock: Callable[[], float] = time.time, origin: str = "agent") -> int:
     """Record an agent's comment on a ticket. It is queued to Jira by the outbox, not sent here."""
-    if not body.strip():
-        raise BoardError("a comment needs a body")
-    now = int(clock())
-    with conn:
-        if conn.execute("select 1 from ticket where key = ?", (key,)).fetchone() is None:
-            raise BoardError(f"no ticket {key}")
-        cur = conn.execute(
-            "insert into ticket_comment (ticket_key, origin, author, body, created_at) "
-            "values (?, ?, ?, ?, ?)", (key, origin, author, body, now))
-        _event(conn, key, now, author, "comment", None, None, body[:200])
-    return cur.lastrowid
+    return _commands(conn, clock).add_comment(key, author, body, origin)
 
 
 def record_approval(conn: sqlite3.Connection, key: str, role: str, head: str,
                     clock: Callable[[], float] = time.time) -> None:
     """A reviewer approves the ticket at a specific commit. The merge gate reads these."""
-    if role not in ("pr_review", "perf_review", "qa", "performance"):
-        raise BoardError(f"{role!r} cannot approve a ticket")
-    if not head:
-        raise BoardError("an approval needs the commit it covers")
-    with conn:
-        if conn.execute("select 1 from ticket where key = ?", (key,)).fetchone() is None:
-            raise BoardError(f"no ticket {key}")
-        _event(conn, key, int(clock()), role, "approve", None, head, head)
+    _commands(conn, clock).record_approval(key, role, head)
 
 
 def approvals_at(conn: sqlite3.Connection, key: str, head: str) -> set[str]:
     """The roles that approved this ticket at exactly this commit."""
-    rows = conn.execute(
-        "select distinct actor from ticket_event where ticket_key = ? and kind = 'approve' and detail = ?",
-        (key, head)).fetchall()
-    return {r["actor"] for r in rows}
+    return _commands(conn).approvals_at(key, head)
 
 
 def carry_workflow_statuses(conn: sqlite3.Connection, data: dict) -> dict:
@@ -756,28 +685,21 @@ def carry_workflow_statuses(conn: sqlite3.Connection, data: dict) -> dict:
 def request_perf_check(conn: sqlite3.Connection, key: str, actor: str, reason: str,
                        clock: Callable[[], float] = time.time) -> None:
     """The dev agent marks a ticket as worth a performance check. Stored on the ticket's history."""
-    if actor != "dev":
-        raise BoardError("only the dev role can request a performance check")
-    if conn.execute("select 1 from ticket where key = ?", (key,)).fetchone() is None:
-        raise BoardError(f"no ticket {key}")
-    with conn:
-        _event(conn, key, int(clock()), actor, "perf_request", None, "requested", reason)
+    _commands(conn, clock).request_perf_check(key, actor, reason)
+
+
+def changed_since(conn: sqlite3.Connection, key: str, at: int, by_anyone_but: str) -> bool:
+    """True if anyone but this actor did something to the ticket at or after `at`."""
+    return _commands(conn).changed_since(key, at, by_anyone_but)
 
 
 def perf_requested(conn: sqlite3.Connection, key: str) -> bool:
-    return conn.execute(
-        "select 1 from ticket_event where ticket_key = ? and kind = 'perf_request' limit 1", (key,)).fetchone() is not None
+    return _commands(conn).perf_requested(key)
 
 
 def approvals_since_stage(conn: sqlite3.Connection, key: str, head: str, stage: str) -> set[str]:
     """Roles that approved this commit after the ticket last entered `stage`."""
-    entered = conn.execute(
-        "select max(at) from ticket_event where ticket_key = ? and kind = 'stage' and to_value = ?",
-        (key, stage)).fetchone()[0] or 0
-    rows = conn.execute(
-        "select distinct actor from ticket_event where ticket_key = ? and kind = 'approve' and detail = ? and at >= ?",
-        (key, head, entered)).fetchall()
-    return {r["actor"] for r in rows}
+    return _commands(conn).approvals_since_stage(key, head, stage)
 
 
 # --- ordering and dependencies --------------------------------------------------
@@ -785,48 +707,23 @@ def approvals_since_stage(conn: sqlite3.Connection, key: str, head: str, stage: 
 def add_block(conn: sqlite3.Connection, prerequisite: str, dependent: str, actor: str, reason: str,
               clock: Callable[[], float] = time.time) -> None:
     """Record that `prerequisite` must merge before `dependent` starts. Jira gets the link on the next send."""
-    if prerequisite == dependent:
-        raise BoardError("a ticket cannot block itself")
-    for k in (prerequisite, dependent):
-        if conn.execute("select 1 from ticket where key = ? and removed_at is null", (k,)).fetchone() is None:
-            raise BoardError(f"no ticket {k}")
-    now = int(clock())
-    conn.execute("insert or ignore into ticket_link (ticket_key, other_key, link_type, direction, synced) "
-                 "values (?, ?, 'Blocks', 'outward', 0)", (prerequisite, dependent))
-    conn.execute("insert or ignore into ticket_link (ticket_key, other_key, link_type, direction, synced) "
-                 "values (?, ?, 'is blocked by', 'inward', 0)", (dependent, prerequisite))
-    _event(conn, dependent, now, actor, "link", None, prerequisite, reason)
-    conn.commit()
+    _commands(conn, clock).add_block(prerequisite, dependent, actor, reason)
 
 
 def blockers(conn: sqlite3.Connection, key: str) -> list[str]:
-    return [r[0] for r in conn.execute(
-        "select other_key from ticket_link where ticket_key = ? and link_type = 'is blocked by' order by other_key",
-        (key,))]
+    return _commands(conn).blockers(key)
 
 
 def pending_links(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     """(prerequisite, dependent) pairs that are not yet in Jira."""
-    return [(r[0], r[1]) for r in conn.execute(
-        "select ticket_key, other_key from ticket_link where link_type = 'Blocks' and direction = 'outward' "
-        "and synced = 0 order by ticket_key, other_key")]
+    return _commands(conn).pending_links()
 
 
 def mark_linked(conn: sqlite3.Connection, pairs: list[tuple[str, str]]) -> None:
-    for prerequisite, dependent in pairs:
-        conn.execute("update ticket_link set synced = 1 where ticket_key = ? and other_key = ? and link_type = 'Blocks'",
-                     (prerequisite, dependent))
-        conn.execute("update ticket_link set synced = 1 where ticket_key = ? and other_key = ? "
-                     "and link_type = 'is blocked by'", (dependent, prerequisite))
-    conn.commit()
+    _commands(conn).mark_linked(pairs)
 
 
 def set_order(conn: sqlite3.Connection, key: str, position: int, actor: str,
               clock: Callable[[], float] = time.time) -> None:
     """Where the ticket sits in the sprint's work order. Lower goes first. Unordered tickets go last."""
-    row = conn.execute("select sort_order from ticket where key = ? and removed_at is null", (key,)).fetchone()
-    if row is None:
-        raise BoardError(f"no ticket {key}")
-    conn.execute("update ticket set sort_order = ? where key = ?", (int(position), key))
-    _event(conn, key, int(clock()), actor, "order", row["sort_order"], int(position), "work order")
-    conn.commit()
+    _commands(conn, clock).set_order(key, position, actor)

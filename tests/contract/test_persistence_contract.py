@@ -153,3 +153,46 @@ def test_product_rounds_and_exit_codes(agent_runs):
     assert agent_runs.last_exit_code("K-1") == 3 and agent_runs.last_exit_code("K-1", "product") == 0
     assert agent_runs.last_exit_code("K-9") is None
     assert [r["role"] for r in agent_runs.runs_for("K-1")][0] == "dev" and len(agent_runs.runs_for("K-1")) == 4
+
+
+# --- the ticket repository -----------------------------------------------------------------
+
+from tests.test_board import PROJECT, payload, sync, ticket  # noqa: E402
+from wf.adapters.persistence.sqlite.board import SqliteTicketRepository  # noqa: E402
+
+
+@pytest.fixture(params=["sqlite", "memory"])
+def tickets(request, tmp_path):
+    if request.param == "sqlite":
+        conn = board.connect(tmp_path / "wf.sqlite")
+        sync(conn, payload(projects=[PROJECT], tickets=[ticket("ABC-1", status="Ready for dev"),
+                                                        ticket("ABC-2", status="Ready for dev")]))
+        return SqliteTicketRepository(conn)
+    state = fakes.MemoryBoardState()
+    state.add_ticket("ABC-1", "ready_for_dev")
+    state.add_ticket("ABC-2", "ready_for_dev")
+    return fakes.MemoryTicketRepository(state)
+
+
+def test_a_ticket_is_loaded_changed_and_saved_with_its_events(tickets):
+    assert tickets.get("NOPE-1") is None
+    t = tickets.get("ABC-1")
+    assert t.stage == "ready_for_dev" and t.flags == [] and t.removed is False
+    t.move_to("in_dev", "dev", "pickup", 5000)
+    t.flag("blocked", "dev", "why", 5001)
+    tickets.save(t)
+    assert t.events == []
+    again = tickets.get("ABC-1")
+    assert again.stage == "in_dev" and again.flags == ["blocked"]
+    assert [(e.kind, e.at, e.to_value) for e in tickets.history("ABC-1")][-2:] == [("stage", 5000, "in_dev"),
+                                                                                  ("flag", 5001, "blocked")]
+
+
+def test_comments_and_blocking_links(tickets):
+    assert tickets.add_comment("ABC-1", "agent", "qa", "hello", 5) >= 1
+    tickets.link_blocks("ABC-2", "ABC-1")
+    tickets.link_blocks("ABC-2", "ABC-1")
+    assert tickets.blockers("ABC-1") == ["ABC-2"] and tickets.blockers("ABC-2") == []
+    assert tickets.pending_links() == [("ABC-2", "ABC-1")]
+    tickets.mark_linked([("ABC-2", "ABC-1")])
+    assert tickets.pending_links() == []
