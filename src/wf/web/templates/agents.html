@@ -59,27 +59,64 @@
   .card .reason { margin-top:6px; font-size:12px; color:var(--bad); border-left:2px solid var(--bad); padding-left:8px; }
 </style>
 <script>
-  // Refresh only what changed. Each poll compares the new HTML with the last one and replaces
-  // just the column (or the activity panel) whose HTML differs. The rest of the page is left alone.
+  // Refresh one ticket at a time. Each poll compares every card with the last one it saw. A card
+  // whose HTML changed is redrawn in place; a card whose stage changed is moved into its new column;
+  // a new ticket gets a card; a ticket that left the board loses its card. Column counts are updated
+  // in place. Nothing else on the page is replaced.
   (function () {
     if (window.__wfPipelineTimer) clearInterval(window.__wfPipelineTimer);
-    var lastColumns = null, lastActivity = null;
+    var lastCards = null, lastActivity = null;
 
-    function refreshColumns() {
-      fetch("/agents/board/columns", { cache: "no-store" })
+    function cardFromHtml(html) {
+      var tmp = document.createElement("div");
+      tmp.innerHTML = html.trim();
+      return tmp.firstElementChild;
+    }
+
+    function refreshCards() {
+      fetch("/agents/board/cards", { cache: "no-store" })
         .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (cols) {
-          if (!cols) return;
-          if (lastColumns === null) { lastColumns = cols; return; }  // first read: the page already shows it
-          var board = document.querySelector("#board .board");
-          var left = board ? board.scrollLeft : 0;
-          Object.keys(cols).forEach(function (stage) {
-            if (lastColumns[stage] === cols[stage]) return;
-            var el = document.querySelector('#board section[data-stage="' + stage + '"]');
-            if (el) el.outerHTML = cols[stage];
+        .then(function (data) {
+          if (!data) return;
+          var first = lastCards === null;
+          var seen = {};
+
+          Object.keys(data.columns).forEach(function (stage) {
+            var sec = document.querySelector('#board section[data-stage="' + stage + '"]');
+            if (!sec) return;
+            var count = data.columns[stage].count;
+            var chip = sec.querySelector("[data-count]");
+            if (chip && chip.textContent !== String(count)) chip.textContent = String(count);
+            sec.classList.toggle("has", count > 0);
           });
-          if (board) board.scrollLeft = left;
-          lastColumns = cols;
+
+          Object.keys(data.cards).forEach(function (key) {
+            var card = data.cards[key];
+            seen[key] = true;
+            if (first) return;  // the page already shows the cards
+            var prev = lastCards[key];
+            if (prev && prev.html === card.html && prev.stage === card.stage) return;
+            var dest = document.querySelector('#board section[data-stage="' + card.stage + '"]');
+            var el = document.getElementById("card-" + key);
+            if (!dest) return;
+            if (!el) {
+              dest.appendChild(cardFromHtml(card.html));
+            } else if (!prev || prev.stage !== card.stage) {
+              var fresh = cardFromHtml(card.html);
+              el.replaceWith(fresh);
+              dest.appendChild(fresh);
+            } else {
+              el.replaceWith(cardFromHtml(card.html));
+            }
+          });
+
+          if (!first) {
+            document.querySelectorAll("#board article[data-key]").forEach(function (el) {
+              if (!seen[el.getAttribute("data-key")]) el.remove();
+            });
+          }
+          lastCards = {};
+          Object.keys(data.cards).forEach(function (key) { lastCards[key] = data.cards[key]; });
         })
         .catch(function () {});
     }
@@ -97,7 +134,7 @@
         .catch(function () {});
     }
 
-    window.__wfPipelineTimer = setInterval(function () { refreshColumns(); refreshActivity(); }, 4000);
+    window.__wfPipelineTimer = setInterval(function () { refreshCards(); refreshActivity(); }, 4000);
   })();
 </script>
 {% endblock %}

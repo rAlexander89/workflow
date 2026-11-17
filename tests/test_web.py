@@ -134,8 +134,8 @@ def test_a_jira_webhook_needs_the_token_and_wakes_the_sync(client, monkeypatch):
     assert not agents_views._jira_changed.is_set()
 
 
-def test_the_board_sends_each_column_separately(client):
-    cols = client.get("/agents/board/columns").json()
-    assert "in_refinement" in cols and "in_dev" in cols
-    assert 'data-stage="in_dev"' in cols["in_dev"]
+def test_the_board_sends_each_card_and_column_count(client):
+    data = client.get("/agents/board/cards").json()
+    assert set(data) == {"cards", "columns"}
+    assert "in_dev" in data["columns"] and data["columns"]["in_dev"]["count"] == 0
     assert "<section" not in client.get("/agents/state").text

@@ -165,12 +165,17 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
     def board_partial(request: Request):
         return templates.TemplateResponse(request, "_board.html", context())
 
-    @app.get("/agents/board/columns")
-    def board_columns():
-        """Each column's HTML, keyed by stage. The page swaps in only the columns that changed."""
+    @app.get("/agents/board/cards")
+    def board_cards():
+        """Each ticket's card HTML and stage, plus each column's count. The page moves and redraws only the cards that changed."""
         ctx = context()
-        column = templates.get_template("_column.html")
-        return {col["stage"]: column.render(col=col, state=ctx["state"]) for col in ctx["columns"]}
+        card = templates.get_template("_card.html")
+        cards, columns = {}, {}
+        for col in ctx["columns"]:
+            columns[col["stage"]] = {"count": len(col["tickets"])}
+            for t in col["tickets"]:
+                cards[t["key"]] = {"stage": col["stage"], "html": card.render(t=t, state=ctx["state"])}
+        return {"cards": cards, "columns": columns}
 
     def pass_work(c):
         access = c.model.claude_code_access
