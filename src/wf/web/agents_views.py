@@ -14,11 +14,11 @@ import time
 import traceback
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from wf import agents, board
+from wf import agents, board, github_webhook
 from wf import config as cfgmod
 from wf import claude_run, github_agent, jira_session, merge, outbox
 from wf.web import pipeline as stage_view
@@ -27,6 +27,7 @@ HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 
 _lock = threading.Lock()
+_wake = threading.Event()  # set by a relevant GitHub webhook: the auto loop checks now, not in 15s
 _state: dict = {"running": None, "log": [], "last": None}
 
 
@@ -163,6 +164,16 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             try:
                 for key in agents.advance_pipeline(conn, repo=_repo_path(c, None)):
                     _log(f"{key}: moved on by the harness")
+                actions = agents.tick(
+                    conn, repo=_repo_path(c, None), runs_dir=_runs_dir(c), access=access,
+                    model=c.agents.model, test_cmd=c.agents.test_cmd, app_cmd=c.agents.app_cmd,
+                    app_url=c.agents.app_url, regression_url=c.agents.regression_url,
+                    bot_domain=c.bots.domain if c.bots.enabled else "",
+                    bot_credentials=c.bots.credentials_file, dry_run=False, claude_bin=_claude_bin(),
+                )
+                for a in actions:
+                    _log(f"{a['key']}: {a['role']} on {a['stage']}"
+                         + (f" -> {a['skipped']}" if a.get("skipped") else f" (exit {a.get('exit_code')})"))
                 if not actions:
                     _log("nothing to run: no ticket is waiting for an agent")
             finally:
@@ -212,10 +223,23 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         finally:
             conn.close()
 
+    @app.post("/webhooks/github")
+    async def github_hook(request: Request):
+        """GitHub tells us something changed: CI finished, a PR moved. We check the forge now."""
+        secret = os.environ.get("WF_GITHUB_WEBHOOK_SECRET", "")
+        body = await request.body()
+        if not github_webhook.signature_ok(secret, body, request.headers.get("X-Hub-Signature-256")):
+            raise HTTPException(403, "bad signature")
+        event = request.headers.get("X-GitHub-Event", "")
+        if github_webhook.is_relevant(event):
+            _wake.set()
+        return {"ok": True, "event": event}
+
     def auto_loop():
         """Start the next pass by itself when a ticket is ready, e.g. right after its flag clears."""
         while True:
-            time.sleep(15)
+            _wake.wait(15)  # a webhook wakes it early; otherwise it checks every 15 seconds
+            _wake.clear()
             try:
                 c = settings()
                 if not (c.agents.auto_run and c.repos and c.model.claude_code_access):
