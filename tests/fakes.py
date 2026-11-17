@@ -224,6 +224,9 @@ class MemoryTicketRepository:
             if (l[0], l[1]) in pairs:
                 l[2] = 1
 
+    def set_jira_status(self, key, status):
+        self._s.tickets[key].jira_status = status
+
 
 class MemoryStageMappings:
     def __init__(self, state: MemoryBoardState):
@@ -245,6 +248,37 @@ class MemoryOutboxQueue:
                "status": "pending", "created_at": now}
         self._s.outbox.append(row)
         return row["id"]
+
+    def pending(self):
+        out = []
+        for r in self._s.outbox:
+            if r["status"] == "pending":
+                t = self._s.tickets[r["ticket_key"]]
+                out.append({"id": r["id"], "ticket_key": r["ticket_key"], "target_stage": r["target_stage"],
+                            "project_key": t.project_key, "jira_status": t.jira_status})
+        return out
+
+    def get(self, item_id):
+        return next((dict(r) for r in self._s.outbox if r["id"] == item_id), None)
+
+    def _row(self, item_id):
+        return next(r for r in self._s.outbox if r["id"] == item_id)
+
+    def update(self, item_id, status, now, detail=None, attempts_bump=False):
+        r = self._row(item_id)
+        r.update(status=status, detail=detail, updated_at=now, attempts=r.get("attempts", 0) + (1 if attempts_bump else 0))
+
+    def mark_sent(self, item_id, now, response_json):
+        self._row(item_id).update(status="sent", jira_response=response_json, updated_at=now)
+
+    def listing(self, status=None):
+        return [dict(r) for r in self._s.outbox if status is None or r["status"] == status]
+
+    def for_ticket(self, key):
+        return [dict(r) for r in self._s.outbox if r["ticket_key"] == key]
+
+    def pending_count(self):
+        return sum(1 for r in self._s.outbox if r["status"] == "pending")
 
 
 class MemoryBoardUnitOfWork:

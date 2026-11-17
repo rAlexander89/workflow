@@ -122,7 +122,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                      from ticket t left join sprint s on s.id = t.sprint_id
                     where t.removed_at is null and t.stage is not null
                     order by t.key""").fetchall()
-            queued = conn.execute("select count(*) from outbox where kind='transition' and status='pending'").fetchone()[0]
+            queued = outbox.pending_count(conn)
             paused = pause.is_paused(conn)
             paused_at = pause.paused_since(conn)
             paused_text = time.strftime("%H:%M", time.localtime(paused_at)) if paused_at else ""

@@ -136,3 +136,58 @@ def test_history_questions_are_pure():
     assert approvals_since_stage(h, "abc", "never") == {"qa", "pr_review"}
     assert perf_requested(h) and not perf_requested(h[:2])
     assert changed_since(h, 2, "qa") is True and changed_since(h[1:2], 2, "qa") is False
+
+
+# --- the outbox -------------------------------------------------------------------------------
+
+from tests.fakes import MemoryBoardState as _State  # noqa: E402
+from wf.application.tracker.outbox import OutboxService  # noqa: E402
+
+
+@pytest.fixture
+def outbox(state):
+    state.tickets["K-1"].jira_status = "Ready for dev"
+    state.mappings[("P", "in_dev")] = "In Dev"
+    state.mappings[("P", "pr_open")] = "PR open"
+    return OutboxService(lambda: MemoryBoardUnitOfWork(state), lambda: 200.0)
+
+
+def seen(**status):
+    return {"K-1": {"status": status.get("status", "Ready for dev"),
+                    "transitions": status.get("transitions", [{"id": "11", "to": "In Dev"}])}}
+
+
+def test_the_plan_asks_for_what_it_has_not_seen_then_sends_an_allowed_move(commands, outbox, state):
+    commands.move_stage("K-1", "in_dev", "dev", "pickup")
+    assert outbox.plan({})["need"] == ["K-1"]
+    plan = outbox.plan(seen())
+    assert plan["send"] == [{"id": 1, "key": "K-1", "transition_id": "11", "to_status": "In Dev"}]
+    assert plan["decided"] == {"sending": 1}
+    assert outbox.plan(seen())["send"] == []  # it is never sent twice
+
+
+def test_the_plan_skips_blocks_or_flags_a_conflict(commands, outbox, state):
+    commands.move_stage("K-1", "in_dev", "dev", "pickup")
+    assert outbox.plan(seen(status="In Dev"))["decided"] == {"skipped": 1}
+    assert state.tickets["K-1"].jira_status == "In Dev"
+
+    commands.move_stage("K-1", "pr_open", "dev", "opened")
+    state.tickets["K-1"].jira_status = "In Dev"
+    assert outbox.plan(seen(status="In Dev", transitions=[]))["decided"] == {"blocked": 1}
+
+    outbox.retry(2)
+    plan = outbox.plan(seen(status="Someone moved it"))
+    assert plan["decided"] == {"conflict": 1} and state.tickets["K-1"].flags == ["needs-human"]
+
+
+def test_an_ack_makes_a_sent_item_final_and_a_stuck_one_can_be_retried(commands, outbox, state):
+    commands.move_stage("K-1", "in_dev", "dev", "pickup")
+    outbox.plan(seen())
+    assert outbox.ack([{"id": 1, "ok": True, "jira_status": "In Dev", "response": {"x": 1}}, {"id": 99}]) == {
+        "sent": 1, "failed": 0, "ignored": 1}
+    assert state.tickets["K-1"].jira_status == "In Dev"
+    assert ("outbox", "jira-agent", None, "In Dev") in kinds(state, "K-1")
+    with pytest.raises(BoardError, match="only blocked, conflict, failed, sending"):
+        outbox.retry(1)
+    with pytest.raises(BoardError, match="no outbox item 7"):
+        outbox.retry(7)

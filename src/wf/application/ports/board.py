@@ -39,6 +39,10 @@ class TicketRepository(Protocol):
 
     def mark_linked(self, pairs: list[tuple[str, str]]) -> None: ...
 
+    def set_jira_status(self, key: str, status: str) -> None:
+        """Record the status Jira shows for the ticket."""
+        ...
+
 
 class StageMappings(Protocol):
     def status_for(self, project_key: str, stage: str) -> str | None:
@@ -47,9 +51,30 @@ class StageMappings(Protocol):
 
 
 class OutboxQueue(Protocol):
+    """Board changes waiting to be pushed to Jira. Each item is sent at most once."""
+
     def enqueue_transition(self, ticket_key: str, stage: str, actor: str, now: int) -> int:
         """Queue a move of the Jira ticket to `stage`. Older pending moves of the ticket are superseded."""
         ...
+
+    def pending(self) -> list[dict]:
+        """Pending moves, oldest first: id, ticket_key, target_stage, project_key, jira_status."""
+        ...
+
+    def get(self, item_id: int) -> dict | None: ...
+
+    def update(self, item_id: int, status: str, now: int, detail: str | None = None,
+               attempts_bump: bool = False) -> None: ...
+
+    def mark_sent(self, item_id: int, now: int, response_json: str) -> None: ...
+
+    def listing(self, status: str | None = None) -> list[dict]: ...
+
+    def for_ticket(self, key: str) -> list[dict]:
+        """The ticket's queued moves, oldest first."""
+        ...
+
+    def pending_count(self) -> int: ...
 
 
 class BoardUnitOfWork(Protocol):

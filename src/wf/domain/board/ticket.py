@@ -112,6 +112,11 @@ class Ticket:
         previous, self.sort_order = self.sort_order, int(position)
         self._record(at, actor, "order", previous, int(position), "work order")
 
+    def sent_to_jira(self, jira_status: str, at: int) -> None:
+        """The Jira agent moved the real ticket; its Jira status is now `jira_status`."""
+        self.jira_status = jira_status
+        self._record(at, "jira-agent", "outbox", None, jira_status, "sent to Jira")
+
     def blocked_by(self, prerequisite: "Ticket", actor: str, reason: str, at: int) -> None:
         """Record that `prerequisite` must merge before this ticket starts."""
         self._record(at, actor, "link", None, prerequisite.key, reason)

@@ -142,8 +142,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             if detail is None:
                 return HTMLResponse("No such ticket.", status_code=404)
             _agents.ensure_schema(c)
-            items = [dict(r) for r in c.execute(
-                "select * from outbox where ticket_key = ? and kind = 'transition' order by id", (key,)).fetchall()]
+            items = outbox.for_ticket(c, key)
             runs = _agents.runs_for(c, key)
             for r in runs:
                 r["when"] = when(r["started_at"])

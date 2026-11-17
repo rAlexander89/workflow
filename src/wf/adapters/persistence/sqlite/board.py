@@ -52,6 +52,9 @@ class SqliteTicketRepository:
             "insert or ignore into ticket_link (ticket_key, other_key, link_type, direction, synced) "
             "values (?, ?, 'is blocked by', 'inward', 0)", (dependent, prerequisite))
 
+    def set_jira_status(self, key: str, status: str) -> None:
+        self._conn.execute("update ticket set jira_status = ? where key = ?", (status, key))
+
     def blockers(self, key: str) -> list[str]:
         return [r[0] for r in self._conn.execute(
             "select other_key from ticket_link where ticket_key = ? and link_type = 'is blocked by' "
@@ -96,6 +99,43 @@ class SqliteOutboxQueue:
             "where ticket_key = ? and kind = 'transition' and status = 'pending' and id != ?",
             (now, ticket_key, cur.lastrowid))
         return cur.lastrowid
+
+    def pending(self) -> list[dict]:
+        rows = self._conn.execute(
+            "select o.id, o.ticket_key, o.target_stage, t.project_key, t.jira_status "
+            "from outbox o join ticket t on t.key = o.ticket_key "
+            "where o.kind = 'transition' and o.status = 'pending' order by o.id").fetchall()
+        return [dict(r) for r in rows]
+
+    def get(self, item_id: int) -> dict | None:
+        row = self._conn.execute("select * from outbox where id = ?", (item_id,)).fetchone()
+        return None if row is None else dict(row)
+
+    def update(self, item_id: int, status: str, now: int, detail: str | None = None,
+               attempts_bump: bool = False) -> None:
+        self._conn.execute(
+            "update outbox set status = ?, detail = ?, updated_at = ?, attempts = attempts + ? where id = ?",
+            (status, detail, now, 1 if attempts_bump else 0, item_id))
+
+    def mark_sent(self, item_id: int, now: int, response_json: str) -> None:
+        self._conn.execute(
+            "update outbox set status = 'sent', jira_response = ?, updated_at = ? where id = ?",
+            (response_json, now, item_id))
+
+    def listing(self, status: str | None = None) -> list[dict]:
+        if status is None:
+            rows = self._conn.execute("select * from outbox order by id").fetchall()
+        else:
+            rows = self._conn.execute("select * from outbox where status = ? order by id", (status,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def for_ticket(self, key: str) -> list[dict]:
+        return [dict(r) for r in self._conn.execute(
+            "select * from outbox where ticket_key = ? and kind = 'transition' order by id", (key,)).fetchall()]
+
+    def pending_count(self) -> int:
+        return self._conn.execute(
+            "select count(*) from outbox where kind = 'transition' and status = 'pending'").fetchone()[0]
 
 
 class SqliteBoardUnitOfWork:
