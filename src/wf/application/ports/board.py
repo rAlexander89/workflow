@@ -125,14 +125,24 @@ class BoardQueries(Protocol):
 
     def ticket_detail(self, key: str) -> dict | None: ...
 
-    def last_sync(self) -> dict | None: ...
+    def last_sync(self, kind: str | None = None) -> dict | None:
+        """The newest sync run (of this kind, if given), or None."""
+        ...
+
+    def active_sprint(self) -> dict | None:
+        """The first active sprint: id and name."""
+        ...
+
+    def sprint_name(self, sprint_id: str) -> str | None: ...
+
+    def ticket_links(self, key: str) -> list[dict]: ...
 
     def counts(self) -> dict:
         """active_tickets, backlog_tickets, flagged, and unmapped_stages."""
         ...
 
     def pipeline_rows(self) -> list[dict]:
-        """In-scope tickets with a stage: key, stage, flags (list), sort_order, sprint_state."""
+        """In-scope tickets with a stage: key, summary, stage, flags (list), sort_order, sprint_state."""
         ...
 
     def pipeline_row(self, key: str) -> dict | None:

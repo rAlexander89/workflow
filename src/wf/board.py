@@ -28,9 +28,9 @@ from typing import Callable
 from wf import mapping
 from wf.adapters.persistence.sqlite.board import SqliteBoardUnitOfWork, SqliteStageMappings, SqliteTicketRepository
 from wf.adapters.persistence.sqlite.board_queries import (  # noqa: F401
-    active_board, backlog, counts, database_path, keys_in_stages, kicked_back_dependents, last_sync, pipeline_row,
-    pipeline_rows, qa_approved_without_pr, ready_candidates, sprint_backlog_keys, sprints, stage_by_key,
-    status_to_stage, ticket_detail, unmapped_stages,
+    active_board, active_sprint, backlog, counts, database_path, keys_in_stages, kicked_back_dependents, last_sync, pipeline_row,
+    pipeline_rows, qa_approved_without_pr, ready_candidates, sprint_backlog_keys, sprint_name, sprints, stage_by_key,
+    status_to_stage, ticket_detail, ticket_links, unmapped_stages,
 )
 from wf.adapters.persistence.sqlite.board_sync import (  # noqa: F401
     _stage_for, apply_payload, carry_workflow_statuses, sync_file,

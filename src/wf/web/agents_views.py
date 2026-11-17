@@ -117,11 +117,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         conn = board.connect(db_path)
         agents.ensure_schema(conn)
         try:
-            rows = conn.execute(
-                """select t.key, t.summary, t.stage, t.flags, s.state as sprint_state
-                     from ticket t left join sprint s on s.id = t.sprint_id
-                    where t.removed_at is null and t.stage is not null
-                    order by t.key""").fetchall()
+            rows = sorted(board.pipeline_rows(conn), key=lambda r: r["key"])
             queued = outbox.pending_count(conn)
             paused = pause.is_paused(conn)
             paused_at = pause.paused_since(conn)
@@ -129,10 +125,8 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             by_stage: dict[str, list[dict]] = {}
             for r in rows:
                 last_code = agents.last_exit_code(conn, r["key"])
-                flags = json.loads(r["flags"] or "[]")
-                reason = conn.execute(
-                    "select detail from ticket_event where ticket_key = ? and kind = 'flag' "
-                    "order by id desc limit 1", (r["key"],)).fetchone()
+                flags = r["flags"]
+                reason = board.last_event_detail(conn, r["key"], "flag")
                 idle = agents.idle_reason(conn, r["key"])
                 by_stage.setdefault(r["stage"], []).append({
                     "key": r["key"], "stage": r["stage"], "summary": r["summary"], "flag_list": flags,
@@ -244,8 +238,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         from wf import observe
         conn = board.connect(db_path)
         try:
-            for key in [r["key"] for r in conn.execute(
-                    "select key from ticket where stage = 'merged' and removed_at is null").fetchall()]:
+            for key in [r["key"] for r in board.keys_in_stages(conn, ("merged",))]:
                 if observe.latest(conn, key, "merge:") is None:
                     sha = observe.merge_sha(conn, key, _repo_slug(c), forge=_forge_for(c))
                     if sha:
@@ -255,8 +248,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                     _log(f"{key}: deployed to dev")
                 elif state == "failed":
                     _log(f"{key}: dev deploy FAILED")
-            for key in [r["key"] for r in conn.execute(
-                    "select key from ticket where stage = 'deployed' and removed_at is null").fetchall()]:
+            for key in [r["key"] for r in board.keys_in_stages(conn, ("deployed",))]:
                 if observe.observe_prod(conn, key, _repo_slug(c), forge=_forge_for(c)) == "success":
                     _log(f"{key}: deployed to prod (observed)")
         finally:
@@ -363,20 +355,20 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                 notice = f"Not started: {idle['why']}"
                 _log(f"{key}: {notice}")
                 return RedirectResponse(_ticket_url(key, notice), status_code=303)
-            stage = conn.execute("select stage from ticket where key = ?", (key,)).fetchone()
-            if stage is None or stage[0] not in agents.STAGE_ROLE:
+            stage = board.get_ticket(conn, key)
+            if stage is None or stage.stage not in agents.STAGE_ROLE:
                 notice = "Not started: no agent works this stage."
                 _log(f"{key}: {notice}")
                 return RedirectResponse(_ticket_url(key, notice), status_code=303)
-            role = (agents.refinement_role(conn, key) if stage[0] in agents.REFINEMENT_STAGES
-                    else agents.STAGE_ROLE[stage[0]])
+            role = (agents.refinement_role(conn, key) if stage.stage in agents.REFINEMENT_STAGES
+                    else agents.STAGE_ROLE[stage.stage])
         finally:
             conn.close()
 
         def work():
             conn = board.connect(db_path)
             try:
-                if stage[0] == "ready_for_dev":
+                if stage.stage == "ready_for_dev":
                     board.move_stage(conn, key, "in_dev", "dev", "dev pickup")
                 res = agents.run_agent(conn, role, key, repo=_repo_path(c, None), runs_dir=_runs_dir(c),
                                        access=c.model.claude_code_access, model=c.agents.model,
@@ -576,7 +568,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         c = settings()
         conn = board.connect(db_path)
         try:
-            sprint = conn.execute("select id, name from sprint where state = 'active' order by id limit 1").fetchone()
+            sprint = board.active_sprint(conn)
         finally:
             conn.close()
         if sprint is None or not keys:
@@ -601,7 +593,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         c = settings()
         conn = board.connect(db_path)
         try:
-            sprint = conn.execute("select id, name from sprint where state = 'active' order by id limit 1").fetchone()
+            sprint = board.active_sprint(conn)
         finally:
             conn.close()
         if sprint is None:
@@ -660,7 +652,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         c = settings()
         conn = board.connect(db_path)
         try:
-            row = conn.execute("select stage from ticket where key = ?", (key,)).fetchone()
+            row = board.get_ticket(conn, key)
             if row is None:
                 return HTMLResponse("", status_code=404)
             branch = agents.branch_for(key)
@@ -675,8 +667,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             head = head_proc.stdout.strip()
             stat = subprocess.run(["git", "diff", "--stat", agents.diff_range(repo, key)], cwd=repo,
                                   capture_output=True, text=True).stdout.strip().splitlines()
-            pr = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'pr' "
-                              "order by id desc limit 1", (key,)).fetchone()
+            pr = board.last_event_detail(conn, key, "pr")
             approvals = sorted(board.approvals_at(conn, key, head))
             tests = agents.last_exit_code(conn, key, "dev")
         finally:
@@ -689,9 +680,8 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         finally:
             conn2.close()
         from wf import github_status as _ghs
-        pr_row = board.connect(db_path).execute(
-            "select detail from ticket_event where ticket_key = ? and kind = 'pr' order by id desc limit 1", (key,)).fetchone()
-        if pr_row and _ghs.pr_status(pr_row[0]).get("merged"):
+        pr_url = board.last_event_detail(board.connect(db_path), key, "pr")
+        if pr_url and _ghs.pr_status(pr_url).get("merged"):
             verdict_html = '<div class="item"><b class="ok">Merged to GitHub main</b></div>'
         else:
             verdict_html = ('<div class="item"><b class="ok">Merge bot: good to merge</b></div>' if verdict.ok else
@@ -705,7 +695,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
 <div class="item">Approved at this commit: {_html.escape(approved)}</div>
 <div class="item">Last dev run: {"ok" if tests == 0 else "not ok" if tests is not None else "none"}</div>
 <div class="item"><a href="/board/ticket/{_html.escape(key)}/diff" target="_blank">View the diff</a></div>
-{('<div class="item">GitHub PR: <a href="' + _html.escape(pr[0]) + '" target="_blank">' + _html.escape(pr[0]) + '</a></div>') if pr else ''}</div>"""
+{('<div class="item">GitHub PR: <a href="' + _html.escape(pr) + '" target="_blank">' + _html.escape(pr) + '</a></div>') if pr else ''}</div>"""
         return HTMLResponse(body)
 
     @app.get("/board/ticket/{key}/diff", response_class=PlainTextResponse)

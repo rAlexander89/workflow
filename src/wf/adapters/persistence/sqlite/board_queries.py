@@ -59,9 +59,27 @@ def ticket_detail(conn: sqlite3.Connection, key: str) -> dict | None:
     }
 
 
-def last_sync(conn: sqlite3.Connection) -> dict | None:
-    row = conn.execute("select * from sync_run order by id desc limit 1").fetchone()
+def last_sync(conn: sqlite3.Connection, kind: str | None = None) -> dict | None:
+    if kind is None:
+        row = conn.execute("select * from sync_run order by id desc limit 1").fetchone()
+    else:
+        row = conn.execute("select * from sync_run where kind = ? order by id desc limit 1", (kind,)).fetchone()
     return None if row is None else dict(row)
+
+
+def active_sprint(conn: sqlite3.Connection) -> dict | None:
+    row = conn.execute("select id, name from sprint where state = 'active' order by id limit 1").fetchone()
+    return None if row is None else dict(row)
+
+
+def sprint_name(conn: sqlite3.Connection, sprint_id: str) -> str | None:
+    row = conn.execute("select name from sprint where id = ?", (sprint_id,)).fetchone()
+    return None if row is None else row["name"]
+
+
+def ticket_links(conn: sqlite3.Connection, key: str) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        "select * from ticket_link where ticket_key = ? order by link_type, other_key", (key,))]
 
 
 def counts(conn: sqlite3.Connection) -> dict:
@@ -76,20 +94,21 @@ def counts(conn: sqlite3.Connection) -> dict:
 
 
 def _pipeline(row: sqlite3.Row) -> dict:
-    return {"key": row["key"], "stage": row["stage"], "flags": json.loads(row["flags"] or "[]"),
-            "sort_order": row["sort_order"], "sprint_state": row["sprint_state"]}
+    return {"key": row["key"], "summary": row["summary"], "stage": row["stage"],
+            "flags": json.loads(row["flags"] or "[]"), "sort_order": row["sort_order"],
+            "sprint_state": row["sprint_state"]}
 
 
 def pipeline_rows(conn: sqlite3.Connection) -> list[dict]:
     return [_pipeline(r) for r in conn.execute(
-        """select t.key, t.stage, t.flags, t.sort_order, s.state as sprint_state
+        """select t.key, t.summary, t.stage, t.flags, t.sort_order, s.state as sprint_state
              from ticket t left join sprint s on s.id = t.sprint_id
             where t.removed_at is null and t.stage is not null""").fetchall()]
 
 
 def pipeline_row(conn: sqlite3.Connection, key: str) -> dict | None:
     row = conn.execute(
-        "select t.key, t.stage, t.flags, t.sort_order, s.state as sprint_state from ticket t "
+        "select t.key, t.summary, t.stage, t.flags, t.sort_order, s.state as sprint_state from ticket t "
         "left join sprint s on s.id = t.sprint_id where t.key = ? and t.removed_at is null", (key,)).fetchone()
     return None if row is None else _pipeline(row)
 
@@ -161,8 +180,17 @@ class SqliteBoardQueries:
     def ticket_detail(self, key: str) -> dict | None:
         return ticket_detail(self._conn, key)
 
-    def last_sync(self) -> dict | None:
-        return last_sync(self._conn)
+    def last_sync(self, kind: str | None = None) -> dict | None:
+        return last_sync(self._conn, kind)
+
+    def active_sprint(self) -> dict | None:
+        return active_sprint(self._conn)
+
+    def sprint_name(self, sprint_id: str) -> str | None:
+        return sprint_name(self._conn, sprint_id)
+
+    def ticket_links(self, key: str) -> list[dict]:
+        return ticket_links(self._conn, key)
 
     def counts(self) -> dict:
         return counts(self._conn)

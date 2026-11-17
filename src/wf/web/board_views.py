@@ -52,8 +52,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
         if kind is None:
             run = s["last_sync"]
         else:
-            row = c.execute("select * from sync_run where kind = ? order by id desc limit 1", (kind,)).fetchone()
-            run = row
+            run = board.last_sync(c, kind)
         age = None if run is None or run["finished_at"] is None else int(time.time()) - run["finished_at"]
         return {
             "status": s,
@@ -90,9 +89,9 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
                 t["updated_text"] = datetime.fromtimestamp(t["jira_updated"]).strftime("%b %d") if t.get("jira_updated") else ""
                 rows.append(t)
             rows.sort(key=lambda t: t.get("jira_updated") or 0, reverse=True)
-            active = c.execute("select id, name from sprint where state = 'active' order by id limit 1").fetchone()
+            active = board.active_sprint(c)
             return page(request, "backlog.html", "backlog", tickets=rows, sent=bool(sent),
-                        active_sprint=dict(active) if active else None, sync=sync_line(c))
+                        active_sprint=active, sync=sync_line(c))
         finally:
             c.close()
 
@@ -110,10 +109,9 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             if detail is None:
                 return HTMLResponse("No such ticket.", status_code=404)
             t = detail["ticket"]
-            active = c.execute("select id, name from sprint where state = 'active' order by id limit 1").fetchone()
-            sprint = c.execute("select name from sprint where id = ?", (t["sprint_id"],)).fetchone() if t["sprint_id"] else None
-            links = [dict(r) for r in c.execute(
-                "select * from ticket_link where ticket_key = ? order by link_type, other_key", (key,))]
+            active = board.active_sprint(c)
+            sprint = {"name": board.sprint_name(c, t["sprint_id"])} if t["sprint_id"] else None
+            links = board.ticket_links(c, key)
             comments = [dict(x, when=when(x["created_at"])) for x in detail["comments"]]
             events = [dict(x, when=when(x["at"])) for x in reversed(detail["events"])]
             stage = t["stage"]
@@ -165,8 +163,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             t["flag_list"] = json.loads(t["flags"] or "[]")
             t["label_list"] = json.loads(t["labels"] or "[]")
             next_role = None if t["flag_list"] else _agents.STAGE_ROLE.get(t["stage"] or "")
-            pr_url = (c.execute("select detail from ticket_event where ticket_key=? and kind='pr' "
-                                "order by id desc limit 1", (key,)).fetchone() or [None])[0]
+            pr_url = board.last_event_detail(c, key, "pr")
             from wf import github_status as _gh
             from wf import observe as _observe
 
@@ -236,7 +233,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             if not text:
                 return RedirectResponse(f"/board/ticket/{key}", status_code=303)
             board.add_comment(c, key, "user", text, origin="user")
-            flags = json.loads(c.execute("select flags from ticket where key = ?", (key,)).fetchone()["flags"])
+            flags = list(board.get_ticket(c, key).flags)
             for flag in flags:
                 board.clear_flag(c, key, flag, "user")
         finally:
