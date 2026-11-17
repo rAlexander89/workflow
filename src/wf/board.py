@@ -596,6 +596,7 @@ FLAGS = ("needs-human", "blocked")
 ALLOWED_MOVES: frozenset[tuple[str, str, str]] = frozenset({
     ("staff", "needs_refinement", "ready_for_dev"),
     ("staff", "in_refinement", "ready_for_dev"),
+    ("harness", "backlog", "ready_for_dev"),
     ("dev", "ready_for_dev", "in_dev"),
     ("dev", "ready_for_dev", "pr_open"),
     ("dev", "in_dev", "pr_open"),

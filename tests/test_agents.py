@@ -370,3 +370,18 @@ def test_a_regression_pass_without_a_perf_request_goes_to_deployed(conn, repo, t
     board.record_approval(conn, "ABC-1", "qa", agents.head_of(wt))
     agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: True)
     assert ticket_row(conn, "ABC-1")["stage"] == "deployed"
+
+
+def test_a_sprint_backlog_ticket_goes_to_ready_for_dev(conn, repo, tmp_path):
+    _set_stage(conn, "backlog")
+    agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: False)
+    assert ticket_row(conn, "ABC-1")["stage"] == "ready_for_dev"
+
+
+def test_only_one_sprint_ticket_starts_at_a_time(conn, repo, tmp_path):
+    _set_stage(conn, "in_dev")  # ABC-1 is already being worked on
+    conn.execute("insert into ticket (key, project_key, jira_id, summary, assignee_id, jira_status, labels, "
+                 "sprint_id, stage, flags, removed_at, synced_at) values ('ABC-2','ABC','2','Two','me','Open','[]','101','backlog','[]',null,0)")
+    conn.commit()
+    agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: False)
+    assert ticket_row(conn, "ABC-2")["stage"] == "backlog"

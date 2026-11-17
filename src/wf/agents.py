@@ -243,14 +243,30 @@ def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, dev_deployed=None)
     - a merged ticket goes to regression once its PR has merged on GitHub (so regression
       runs on dev, after the deploy). pr_merged(key) says whether it has
     - a regression pass goes to performance if the dev asked for a check
+    - a ticket in the active sprint's backlog is ready for development: it goes to ready_for_dev,
+      and the dev agent takes it from there
     Deploying to prod is a person's step; nothing here moves a ticket past regression.
     """
     from wf import observe
 
+    # One ticket at a time: a sprint ticket is only started once no other ticket is still in flight.
+    moved: list[str] = []
+    in_flight = conn.execute(
+        "select count(*) from ticket where removed_at is null and stage in ('ready_for_dev', 'in_dev', 'pr_open', "
+        "'pr_in_review', 'ready_for_perf_review', 'ready_for_qa', 'qa_approved', 'merged', 'regression', "
+        "'performance')").fetchone()[0]
+    if in_flight == 0:
+        nxt = conn.execute(
+            "select t.key from ticket t join sprint s on s.id = t.sprint_id "
+            "where t.stage = 'backlog' and s.state = 'active' and t.removed_at is null and t.flags = '[]' "
+            "order by t.key limit 1").fetchone()
+        if nxt is not None:
+            board.move_stage(conn, nxt["key"], "ready_for_dev", "harness", "next in the active sprint: ready for development")
+            moved.append(nxt["key"])
+
     if dev_deployed is None:
         dev_deployed = lambda key: observe.dev_deployed(conn, key)  # noqa: E731
     ensure_schema(conn)
-    moved: list[str] = []
     rows = conn.execute(
         "select key, stage from ticket where stage in ('pr_open', 'pr_in_review', 'merged', 'regression', 'performance') "
         "and removed_at is null").fetchall()
