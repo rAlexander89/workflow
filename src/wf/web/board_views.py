@@ -128,7 +128,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             c.close()
 
     @app.get("/board/ticket/{key}", response_class=HTMLResponse)
-    def ticket_page(request: Request, key: str):
+    def ticket_page(request: Request, key: str, notice: str = ""):
         from wf import agents as _agents
         from wf.web import pipeline as _pipeline
         from datetime import datetime
@@ -184,6 +184,7 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
             flag_reason = next((e["detail"] for e in events if e["kind"] == "flag"), "") if t["flag_list"] else ""
             return page(request, "ticket.html", "agents", ticket=t, comments=detail["comments"],
                         events=events, noise_count=len(noise), flag_reason=flag_reason, outbox_items=items, runs=runs, next_role=next_role,
+                        notice=notice,
                         stages=_pipeline.progress(t["stage"]), title=key, failures=failure_list,
                         marker=_pipeline.stage_marker(t["stage"]),
                         flow=_pipeline.flow_states(

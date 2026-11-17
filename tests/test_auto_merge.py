@@ -3,12 +3,12 @@ import subprocess
 from wf import board, github_agent
 from tests.test_board import clock, payload, sync, ticket
 
-ISSUE = "FKST-29"
+ISSUE = "ABC-29"
 
 
 class Git:
     """Fakes the git and gh calls the merge needs."""
-    def __init__(self, subjects="FKST-29: fix login heading", head="abc123", merge_ok=True):
+    def __init__(self, subjects="ABC-29: fix login heading", head="abc123", merge_ok=True):
         self.subjects, self.head, self.merge_ok, self.calls = subjects, head, merge_ok, []
 
     def __call__(self, argv, cwd):
@@ -67,7 +67,7 @@ def test_without_qa_approval_on_this_commit_nothing_merges(tmp_path):
 
 def test_a_branch_that_adds_other_commits_is_never_merged(tmp_path):
     c = setup(tmp_path)
-    git = Git(subjects="FKST-29: fix\nSend each listing once")
+    git = Git(subjects="ABC-29: fix\nSend each listing once")
     assert github_agent.merge_when_clear(c, repo=tmp_path, runner=git, status=green()) == []
     assert not any(call[:3] == ["gh", "pr", "merge"] for call in git.calls)
 
@@ -83,8 +83,8 @@ def test_the_merge_bot_reads_the_pr_itself_not_the_local_branch(tmp_path):
     c = setup(tmp_path)
     # the local branch is clean, but the PR on GitHub carries another ticket's commits
     status = lambda url: {"ok": True, "state": "OPEN", "merged": False, "checks": "passed",
-                          "head": "abc123", "commit_subjects": ["Merge branch 'main' of github", "FKST-29: fix"]}
-    git = Git(subjects="FKST-29: fix login heading")
+                          "head": "abc123", "commit_subjects": ["Merge branch 'main' of github", "ABC-29: fix"]}
+    git = Git(subjects="ABC-29: fix login heading")
     assert github_agent.merge_when_clear(c, repo=tmp_path, runner=git, status=status) == []
     assert not any(call[:3] == ["gh", "pr", "merge"] for call in git.calls)
 
@@ -92,5 +92,5 @@ def test_the_merge_bot_reads_the_pr_itself_not_the_local_branch(tmp_path):
 def test_a_pr_whose_head_is_not_the_branch_head_is_not_merged(tmp_path):
     c = setup(tmp_path)
     status = lambda url: {"ok": True, "state": "OPEN", "merged": False, "checks": "passed",
-                          "head": "other", "commit_subjects": ["FKST-29: fix"]}
+                          "head": "other", "commit_subjects": ["ABC-29: fix"]}
     assert github_agent.merge_when_clear(c, repo=tmp_path, runner=Git(), status=status) == []

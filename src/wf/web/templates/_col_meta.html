@@ -1,0 +1,7 @@
+<div class="colmeta" id="colmeta-{{ col.stage }}">
+  <header class="colhead">
+    <span>{{ col.label }}</span>
+    <span class="chip">{{ col.tickets | length }}</span>
+  </header>
+  <div class="owner muted">{{ col.owner }}{% if col.role %} · runs <b>{{ col.role }}</b>{% endif %}</div>
+</div>

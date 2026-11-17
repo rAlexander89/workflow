@@ -15,7 +15,7 @@ import traceback
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from wf import agents, board, github_webhook, jira_webhook, pause
@@ -134,8 +134,10 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                 reason = conn.execute(
                     "select detail from ticket_event where ticket_key = ? and kind = 'flag' "
                     "order by id desc limit 1", (r["key"],)).fetchone()
+                idle = agents.idle_reason(conn, r["key"])
                 by_stage.setdefault(r["stage"], []).append({
-                    "key": r["key"], "summary": r["summary"], "flag_list": flags,
+                    "key": r["key"], "stage": r["stage"], "summary": r["summary"], "flag_list": flags,
+                    "idle": idle,
                     "flag_reason": (reason["detail"] or "") if reason and flags else "",
                     "in_sprint": r["sprint_state"] == "active",
                     "role": None if flags else agents.STAGE_ROLE.get(r["stage"]),
@@ -164,18 +166,6 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
     @app.get("/agents/board", response_class=HTMLResponse)
     def board_partial(request: Request):
         return templates.TemplateResponse(request, "_board.html", context())
-
-    @app.get("/agents/board/cards")
-    def board_cards():
-        """Each ticket's card HTML and stage, plus each column's count. The page moves and redraws only the cards that changed."""
-        ctx = context()
-        card = templates.get_template("_card.html")
-        cards, columns = {}, {}
-        for col in ctx["columns"]:
-            columns[col["stage"]] = {"count": len(col["tickets"])}
-            for t in col["tickets"]:
-                cards[t["key"]] = {"stage": col["stage"], "html": card.render(t=t, state=ctx["state"])}
-        return {"cards": cards, "columns": columns}
 
     def pass_work(c):
         access = c.model.claude_code_access
@@ -356,25 +346,37 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
 
     threading.Thread(target=auto_loop, daemon=True).start()
 
+    def _ticket_url(key: str, notice: str) -> str:
+        from urllib.parse import quote
+        return f"/board/ticket/{key}?notice={quote(notice)}"
+
     @app.post("/agents/run/{key}")
     def run_one(key: str):
         c = settings()
         conn = board.connect(db_path)
         try:
-            paused = pause.is_paused(conn)
+            if pause.is_paused(conn):
+                notice = "Not started: work is paused. Resume it, then run the agent."
+                _log(f"{key}: {notice}")
+                return RedirectResponse(_ticket_url(key, notice), status_code=303)
+            idle = agents.idle_reason(conn, key)
+            if idle is not None and not idle["can_run"]:
+                notice = f"Not started: {idle['why']}"
+                _log(f"{key}: {notice}")
+                return RedirectResponse(_ticket_url(key, notice), status_code=303)
+            stage = conn.execute("select stage from ticket where key = ?", (key,)).fetchone()
+            if stage is None or stage[0] not in agents.STAGE_ROLE:
+                notice = "Not started: no agent works this stage."
+                _log(f"{key}: {notice}")
+                return RedirectResponse(_ticket_url(key, notice), status_code=303)
+            role = (agents.refinement_role(conn, key) if stage[0] in agents.REFINEMENT_STAGES
+                    else agents.STAGE_ROLE[stage[0]])
         finally:
             conn.close()
-        if paused:
-            _log(f"{key}: work is paused: resume it before running an agent")
-            return RedirectResponse(f"/board/ticket/{key}", status_code=303)
 
         def work():
             conn = board.connect(db_path)
             try:
-                stage = conn.execute("select stage from ticket where key = ?", (key,)).fetchone()
-                if stage is None or stage[0] not in agents.STAGE_ROLE:
-                    raise board.BoardError(f"{key} has no agent for its stage")
-                role = agents.STAGE_ROLE[stage[0]]
                 if stage[0] == "ready_for_dev":
                     board.move_stage(conn, key, "in_dev", "dev", "dev pickup")
                 res = agents.run_agent(conn, role, key, repo=_repo_path(c, None), runs_dir=_runs_dir(c),
@@ -385,9 +387,75 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             finally:
                 conn.close()
 
-        if not _start(f"{key} {agents.STAGE_ROLE.get('ready_for_dev', 'agent')}", work):
-            _log("another action is already running")
-        return RedirectResponse(f"/board/ticket/{key}", status_code=303)
+        if not _start(f"{key} {role}", work):
+            notice = "Not started: another action is already running. Try again when it finishes."
+        else:
+            notice = f"Started the {role} agent on {key}. The result appears below and in the Activity log."
+        _log(f"{key}: {notice}")
+        return RedirectResponse(_ticket_url(key, notice), status_code=303)
+
+    def _render(name: str, **ctx) -> str:
+        return templates.get_template(name).render(**ctx)
+
+    def _ticket_live_html(key: str) -> str:
+        conn = board.connect(db_path)
+        try:
+            idle = agents.idle_reason(conn, key)
+        finally:
+            conn.close()
+        with _lock:
+            running = _state["running"]
+        mine = running if running and running.startswith(key + " ") else None
+        other = running if running and not mine else None
+        return _render("_ticket_live.html", ticket={"key": key}, idle=idle, running=mine, other=other)
+
+    @app.get("/events")
+    def events(ticket: str = ""):
+        """One server-sent stream for the page. It sends only what changed since the last message.
+
+        The browser opens it once and never polls. The server checks the board about every
+        second and pushes: a card that changed, a card that left, a column header, the activity
+        panel, and (on a ticket page) that ticket's live status.
+        """
+        def frames():
+            prev_cards: dict[str, tuple[str, str]] = {}
+            prev_cols: dict[str, tuple[bool, str]] = {}
+            prev_state = None
+            prev_live = None
+            beats = 0
+            while True:
+                msgs: list[dict] = []
+                try:
+                    ctx = context()
+                    cols: dict[str, tuple[bool, str]] = {}
+                    cards: dict[str, tuple[str, str]] = {}
+                    for col in ctx["columns"]:
+                        stage = col["stage"]
+                        cols[stage] = (bool(col["tickets"]), _render("_col_meta.html", col=col))
+                        for t in col["tickets"]:
+                            cards[t["key"]] = (stage, _render("_card.html", t=t, stage=stage, state=ctx["state"]))
+                    msgs.extend(board_events(prev_cards, prev_cols, cards, cols))
+                    state_html = _render("_agents_state.html", state=ctx["state"])
+                    if state_html != prev_state:
+                        msgs.append({"type": "state", "html": state_html})
+                        prev_state = state_html
+                    if ticket:
+                        live = _ticket_live_html(ticket)
+                        if live != prev_live:
+                            msgs.append({"type": "live", "html": live})
+                            prev_live = live
+                    prev_cards, prev_cols = cards, cols
+                except Exception as e:  # keep the stream alive; the next pass tries again
+                    msgs.append({"type": "error", "message": str(e)})
+                for m in msgs:
+                    yield f"data: {json.dumps(m)}\n\n"
+                beats += 1
+                if beats % 15 == 0:
+                    yield ": keep-alive\n\n"
+                time.sleep(1.0)
+
+        return StreamingResponse(frames(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.post("/agents/deploy/{key}")
     def deploy_ticket(key: str, confirm: str = Form("")):
@@ -656,6 +724,29 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
     @app.get("/agents/state", response_class=HTMLResponse)
     def state_partial(request: Request):
         return templates.TemplateResponse(request, "_agents_state.html", {"state": context()["state"]})
+
+
+def board_events(prev_cards: dict, prev_cols: dict, cards: dict, cols: dict) -> list[dict]:
+    """The events that turn the last board into the current one. Only what changed is sent.
+
+    cards: key -> (stage, card html). cols: stage -> (has tickets, column header html).
+    """
+    msgs: list[dict] = []
+    for stage, value in cols.items():
+        if prev_cols.get(stage) != value:
+            msgs.append({"type": "column.update", "stage": stage, "has": value[0], "html": value[1]})
+    for key, (stage, html) in cards.items():
+        if key not in prev_cards:
+            msgs.append({"type": "card.add", "key": key, "stage": stage, "html": html})
+            continue
+        was_stage, was_html = prev_cards[key]
+        if was_stage != stage:
+            msgs.append({"type": "card.move", "key": key, "from": was_stage, "to": stage, "html": html})
+        elif was_html != html:
+            msgs.append({"type": "card.update", "key": key, "html": html})
+    for key in prev_cards.keys() - cards.keys():
+        msgs.append({"type": "card.remove", "key": key})
+    return msgs
 
 
 def _claude_bin() -> str | None:

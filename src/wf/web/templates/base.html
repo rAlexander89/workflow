@@ -62,5 +62,59 @@
     </nav>
   </header>
   <main>{% block content %}{% endblock %}</main>
+<script>
+// The page listens to one server-sent stream. The server sends events only for what changed.
+// Each event calls one method. The browser never polls, so scroll position and typed text are kept.
+(function () {
+  function fresh(html) { var t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; }
+  var Board = {
+    column: function (stage) { return document.querySelector('section.col[data-column="' + stage + '"]'); },
+    cards: function (stage) { var c = this.column(stage); return c ? c.querySelector('.cards') : null; },
+    card: function (key) { return document.getElementById('card-' + key); },
+    columnUpdate: function (m) {
+      var sec = this.column(m.stage); if (!sec) return;
+      sec.classList.toggle('has', !!m.has);
+      var meta = document.getElementById('colmeta-' + m.stage), next = fresh(m.html);
+      if (meta && meta.outerHTML !== next.outerHTML) meta.replaceWith(next);
+    },
+    cardAdd: function (m) {
+      var box = this.cards(m.stage); if (!box || this.card(m.key)) return;
+      box.appendChild(fresh(m.html));
+    },
+    cardUpdate: function (m) {
+      var old = this.card(m.key), next = fresh(m.html);
+      if (old && old.outerHTML !== next.outerHTML) old.replaceWith(next);
+    },
+    cardMove: function (m) {
+      // Move the card's own element into the new column's list, then bring its contents up to date.
+      var box = this.cards(m.to), el = this.card(m.key); if (!box) return;
+      if (!el) { box.appendChild(fresh(m.html)); return; }
+      box.appendChild(el);
+      var next = fresh(m.html);
+      if (el.outerHTML !== next.outerHTML) el.replaceWith(next);
+    },
+    cardRemove: function (m) { var old = this.card(m.key); if (old) old.remove(); }
+  };
+  var Panels = {
+    state: function (m) { var a = document.getElementById('activity'); if (a && a.innerHTML !== m.html) a.innerHTML = m.html; },
+    live: function (m) { var l = document.getElementById('ticket-live'); if (l && l.innerHTML !== m.html) l.innerHTML = m.html; }
+  };
+  var handlers = {
+    'column.update': function (m) { Board.columnUpdate(m); },
+    'card.add': function (m) { Board.cardAdd(m); },
+    'card.update': function (m) { Board.cardUpdate(m); },
+    'card.move': function (m) { Board.cardMove(m); },
+    'card.remove': function (m) { Board.cardRemove(m); },
+    'state': function (m) { Panels.state(m); },
+    'live': function (m) { Panels.live(m); }
+  };
+  var ticketEl = document.getElementById('ticket-live');
+  var es = new EventSource('/events' + (ticketEl ? '?ticket=' + encodeURIComponent(ticketEl.dataset.key) : ''));
+  es.onmessage = function (e) {
+    var m; try { m = JSON.parse(e.data); } catch (err) { return; }
+    var h = handlers[m.type]; if (h) h(m);
+  };
+})();
+</script>
 </body>
 </html>

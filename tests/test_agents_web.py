@@ -71,4 +71,45 @@ def test_a_paused_ticket_run_starts_nothing(client):
     client.post("/agents/pause", follow_redirects=False)
     r = client.post("/agents/run/ABC-1", follow_redirects=False)
     assert r.status_code == 303
-    assert "ABC-1: work is paused" in client.get("/agents/state").text
+    assert "ABC-1: Not started: work is paused" in client.get("/agents/state").text
+
+
+def test_run_again_says_what_happened_on_the_ticket_page(client):
+    client.post("/agents/pause", follow_redirects=False)
+    r = client.post("/agents/run/ABC-1", follow_redirects=False)
+    assert r.status_code == 303 and "notice=" in r.headers["location"]
+    page = client.get(r.headers["location"]).text
+    assert "Not started: work is paused" in page
+
+
+def test_pages_have_no_polling_timers(client):
+    ticket = client.get("/board/ticket/ABC-1").text
+    assert 'data-key="ABC-1"' in ticket and "every " not in ticket
+    board = client.get("/agents").text
+    assert "every 4s" not in board and 'id="activity"' in board
+
+
+def test_the_event_stream_opens_and_sends_the_board(client):
+    with client.stream("GET", "/events") as r:
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/event-stream")
+        for line in r.iter_lines():
+            if line.startswith("data:"):
+                assert "type" in line
+                break
+
+def test_a_card_that_changes_column_is_sent_as_a_move():
+    from wf.web.agents_views import board_events
+    prev = {"ABC-1": ("in_dev", "<article>a</article>")}
+    now = {"ABC-1": ("pr_open", "<article>a</article>")}
+    events = board_events(prev, {}, now, {})
+    assert [e["type"] for e in events] == ["card.move"]
+    assert events[0]["from"] == "in_dev" and events[0]["to"] == "pr_open"
+
+
+def test_board_events_send_only_what_changed():
+    from wf.web.agents_views import board_events
+    prev = {"ABC-1": ("in_dev", "<a>1</a>"), "ABC-2": ("in_dev", "<a>2</a>"), "ABC-3": ("qa", "<a>3</a>")}
+    now = {"ABC-1": ("in_dev", "<a>1 changed</a>"), "ABC-2": ("in_dev", "<a>2</a>"), "ABC-4": ("qa", "<a>4</a>")}
+    kinds = sorted((e["type"], e["key"]) for e in board_events(prev, {}, now, {}))
+    assert kinds == [("card.add", "ABC-4"), ("card.remove", "ABC-3"), ("card.update", "ABC-1")]

@@ -1,8 +1,6 @@
-<section class="col {% if col.tickets %}has{% endif %}" data-stage="{{ col.stage }}">
-    <header class="colhead">
-      <span>{{ col.label }}</span>
-      <span class="chip" data-count>{{ col.tickets | length }}</span>
-    </header>
-    <div class="owner muted">{{ col.owner }}{% if col.role %} · runs <b>{{ col.role }}</b>{% endif %}</div>
+<section class="col {% if col.tickets %}has{% endif %}" id="column-{{ col.stage }}" data-column="{{ col.stage }}">
+  {% include "_col_meta.html" %}
+  <div class="cards">
     {% for t in col.tickets %}{% include "_card.html" %}{% endfor %}
-  </section>
+  </div>
+</section>

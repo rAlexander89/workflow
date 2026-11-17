@@ -11,6 +11,7 @@ that branch: dev writes to it, review and QA check it, and the merge gate reads 
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -219,6 +220,11 @@ def run_agent(
     }
     gateway = [sys.executable, "-m", "wf.gateway_server"]
     env.update({"WF_BOT_EMAIL": bot_email, "WF_BOT_CREDENTIALS": cred_path})
+    if os.environ.get("WF_RUNNER_SECRET") and regression_url:
+        # The secret goes to the dev deploy's hostname only. Prod is never configured here.
+        from urllib.parse import urlsplit
+        env["WF_RUNNER_SECRET"] = os.environ["WF_RUNNER_SECRET"]
+        env["WF_RUNNER_SECRET_HOST"] = urlsplit(regression_url).hostname or ""
     if on_dev:
         env["WF_BOT_APP"] = regression_url  # the bot signs in to the same app it tests
     result = claude_run.run(
@@ -388,6 +394,50 @@ def _finished_and_unchanged(conn: sqlite3.Connection, key: str, stage: str) -> b
         "select 1 from ticket_event where ticket_key = ? and at >= ? and actor != ? limit 1",
         (key, last["started_at"], last["role"])).fetchone()
     return changed is None
+
+
+def idle_reason(conn: sqlite3.Connection, key: str) -> dict | None:
+    """Why a ticket is not moving, or None when the next pass will pick it up.
+
+    Returns {"why": text, "can_run": bool}. can_run means a person can start the stage's agent
+    now with the Run again button. It is False when something else has to change first.
+    """
+    from wf import pause
+
+    ensure_schema(conn)
+    row = conn.execute(
+        "select t.stage, t.flags, s.state as sprint_state from ticket t "
+        "left join sprint s on s.id = t.sprint_id where t.key = ? and t.removed_at is null", (key,)).fetchone()
+    if row is None or row["stage"] is None:
+        return None
+    stage = row["stage"]
+    flags = json.loads(row["flags"] or "[]")
+    role = refinement_role(conn, key) if stage in REFINEMENT_STAGES else STAGE_ROLE.get(stage)
+
+    if pause.is_paused(conn):
+        return {"why": "Work is paused. It resumes when you press Resume work.", "can_run": False}
+    if flags:
+        return {"why": f"Flagged: {', '.join(flags)}. Clear the flag first.", "can_run": False}
+    if role is None:
+        return None  # nothing is expected to happen here (backlog, done): no notice
+    if row["sprint_state"] != "active":
+        return {"why": "Not in an active sprint, so no agent picks it up.", "can_run": False}
+    if stage in REFINEMENT_STAGES:
+        rounds = conn.execute("select count(*) from agent_run where key = ? and role = 'product'", (key,)).fetchone()[0]
+        if rounds >= MAX_REFINEMENT_ROUNDS:
+            return {"why": f"{rounds} refinement rounds without agreement. A person has to decide.", "can_run": True}
+    elif runs_at(conn, key, stage) >= MAX_RUNS_PER_STAGE:
+        return {"why": f"{MAX_RUNS_PER_STAGE} runs in a row failed here. A person has to look at the last run.",
+                "can_run": True}
+    elif stage == "ready_for_dev":
+        stage_of = {r["key"]: r["stage"] for r in conn.execute("select key, stage from ticket where removed_at is null")}
+        waiting = unmet_blockers(conn, key, stage_of)
+        if waiting:
+            return {"why": f"Waiting for {', '.join(waiting)} to reach dev first.", "can_run": False}
+    elif stage not in REFINEMENT_STAGES and _finished_and_unchanged(conn, key, stage):
+        return {"why": f"The {role} agent finished its last run here and nothing has changed since. "
+                       "It won't run again until something changes or you run it.", "can_run": True}
+    return None
 
 
 def tick(

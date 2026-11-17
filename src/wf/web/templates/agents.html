@@ -36,9 +36,7 @@
   </div>
 </div>
 
-<div id="board">
-  {% include "_board.html" %}
-</div>
+{% include "_board.html" %}
 
 <h2>Activity</h2>
 <div class="panel" id="activity">
@@ -58,83 +56,4 @@
   .card.clickable:hover { border-color:var(--accent); }
   .card .reason { margin-top:6px; font-size:12px; color:var(--bad); border-left:2px solid var(--bad); padding-left:8px; }
 </style>
-<script>
-  // Refresh one ticket at a time. Each poll compares every card with the last one it saw. A card
-  // whose HTML changed is redrawn in place; a card whose stage changed is moved into its new column;
-  // a new ticket gets a card; a ticket that left the board loses its card. Column counts are updated
-  // in place. Nothing else on the page is replaced.
-  (function () {
-    if (window.__wfPipelineTimer) clearInterval(window.__wfPipelineTimer);
-    var lastCards = null, lastActivity = null;
-
-    function cardFromHtml(html) {
-      var tmp = document.createElement("div");
-      tmp.innerHTML = html.trim();
-      return tmp.firstElementChild;
-    }
-
-    function refreshCards() {
-      fetch("/agents/board/cards", { cache: "no-store" })
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (data) {
-          if (!data) return;
-          var first = lastCards === null;
-          var seen = {};
-
-          Object.keys(data.columns).forEach(function (stage) {
-            var sec = document.querySelector('#board section[data-stage="' + stage + '"]');
-            if (!sec) return;
-            var count = data.columns[stage].count;
-            var chip = sec.querySelector("[data-count]");
-            if (chip && chip.textContent !== String(count)) chip.textContent = String(count);
-            sec.classList.toggle("has", count > 0);
-          });
-
-          Object.keys(data.cards).forEach(function (key) {
-            var card = data.cards[key];
-            seen[key] = true;
-            if (first) return;  // the page already shows the cards
-            var prev = lastCards[key];
-            if (prev && prev.html === card.html && prev.stage === card.stage) return;
-            var dest = document.querySelector('#board section[data-stage="' + card.stage + '"]');
-            var el = document.getElementById("card-" + key);
-            if (!dest) return;
-            if (!el) {
-              dest.appendChild(cardFromHtml(card.html));
-            } else if (!prev || prev.stage !== card.stage) {
-              var fresh = cardFromHtml(card.html);
-              el.replaceWith(fresh);
-              dest.appendChild(fresh);
-            } else {
-              el.replaceWith(cardFromHtml(card.html));
-            }
-          });
-
-          if (!first) {
-            document.querySelectorAll("#board article[data-key]").forEach(function (el) {
-              if (!seen[el.getAttribute("data-key")]) el.remove();
-            });
-          }
-          lastCards = {};
-          Object.keys(data.cards).forEach(function (key) { lastCards[key] = data.cards[key]; });
-        })
-        .catch(function () {});
-    }
-
-    function refreshActivity() {
-      fetch("/agents/state", { cache: "no-store" })
-        .then(function (r) { return r.ok ? r.text() : null; })
-        .then(function (html) {
-          if (html === null) return;
-          var panel = document.getElementById("activity");
-          if (lastActivity === null) { lastActivity = html; return; }
-          if (html !== lastActivity && panel) panel.innerHTML = html;
-          lastActivity = html;
-        })
-        .catch(function () {});
-    }
-
-    window.__wfPipelineTimer = setInterval(function () { refreshCards(); refreshActivity(); }, 4000);
-  })();
-</script>
 {% endblock %}
