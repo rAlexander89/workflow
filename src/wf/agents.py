@@ -93,6 +93,25 @@ def ensure_worktree(repo: Path, key: str, worktrees: Path) -> Path:
     return path
 
 
+def sync_with_main(repo: Path, worktree: Path) -> None:
+    """Start from the latest main: fetch GitHub's main and rebase the ticket's branch onto it.
+
+    Raises if the fetch fails or the rebase conflicts (the rebase is undone first). The branch
+    is not changed in that case.
+    """
+    has_origin = subprocess.run(["git", "remote", "get-url", "origin"], cwd=repo,
+                                capture_output=True).returncode == 0
+    if not has_origin:
+        return  # a repo with no hosted remote: its local main is the main
+    fetch = subprocess.run(["git", "fetch", "-q", "origin", "main"], cwd=repo, capture_output=True, text=True)
+    if fetch.returncode != 0:
+        raise RuntimeError(f"could not fetch the latest main: {fetch.stderr.strip()[-200:]}")
+    rebase = subprocess.run(["git", "rebase", "origin/main"], cwd=worktree, capture_output=True, text=True)
+    if rebase.returncode != 0:
+        subprocess.run(["git", "rebase", "--abort"], cwd=worktree, capture_output=True)
+        raise RuntimeError("could not rebase onto the latest main; a person needs to resolve the conflict")
+
+
 def diff_range(repo: Path, key: str) -> str:
     """What to diff for a ticket: its changes as merged into main, or its branch against main."""
     proc = subprocess.run(["git", "log", "main", "--merges", "--format=%H", "-1",
@@ -179,6 +198,12 @@ def run_agent(
         raise board.BoardError(f"no ticket {key}")
     stage = detail["ticket"]["stage"]
     worktree = ensure_worktree(repo, key, runs_dir / "worktrees")
+    if role == "dev":
+        try:
+            sync_with_main(repo, worktree)
+        except RuntimeError as e:
+            board.set_flag(conn, key, "blocked", "harness", str(e), clock=clock)
+            return AgentResult(key, stage, role, None)
     run_dir = runs_dir / "runs" / key / f"{role}-{int(clock())}"
     env = {
         "WF_ROLE": role, "WF_KEY": key, "WF_DB": str(conn.execute("pragma database_list").fetchone()[2]),

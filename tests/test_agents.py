@@ -396,3 +396,26 @@ def test_a_review_that_sends_the_ticket_back_makes_the_stage_run_again(conn):
     conn.execute("insert into ticket_event (ticket_key, at, actor, kind) values ('ABC-1', 4000000100, 'pr_review', 'stage')")
     conn.commit()
     assert not agents._finished_and_unchanged(conn, "ABC-1", "in_dev")
+
+
+def test_a_dev_run_starts_from_the_latest_main(tmp_path):
+    import subprocess as sp
+    origin = tmp_path / "origin.git"
+    sp.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
+    seed = tmp_path / "seed"
+    sp.run(["git", "clone", "-q", str(origin), str(seed)], check=True)
+    for args in (["config", "user.email", "t@t"], ["config", "user.name", "t"]):
+        sp.run(["git", *args], cwd=seed, check=True)
+    (seed / "a.txt").write_text("one\n")
+    sp.run(["git", "add", "-A"], cwd=seed, check=True)
+    sp.run(["git", "commit", "-qm", "base"], cwd=seed, check=True)
+    sp.run(["git", "push", "-q", "origin", "main"], cwd=seed, check=True)
+    local = tmp_path / "local"
+    sp.run(["git", "clone", "-q", str(origin), str(local)], check=True)
+    wt = agents.ensure_worktree(local, "ABC-9", tmp_path / "wt")
+    (seed / "b.txt").write_text("two\n")
+    sp.run(["git", "add", "-A"], cwd=seed, check=True)
+    sp.run(["git", "commit", "-qm", "newer main"], cwd=seed, check=True)
+    sp.run(["git", "push", "-q", "origin", "main"], cwd=seed, check=True)
+    agents.sync_with_main(local, wt)
+    assert (wt / "b.txt").exists()
