@@ -68,3 +68,9 @@ def test_prod_deploy_starts_only_after_dev_succeeded_on_the_same_commit(tmp_path
     gh = Gh()
     assert observe.start_prod_deploy(c, "ABC-1", "o/r", runner=gh)
     assert ["gh", "workflow", "run", "deploy-prod.yml", "--repo", "o/r", "-f", f"commit={SHA}"] in gh.calls
+
+
+def test_the_merge_observer_accepts_the_forge_the_loop_passes():
+    import inspect
+    from wf import observe
+    assert "forge" in inspect.signature(observe.merge_sha).parameters

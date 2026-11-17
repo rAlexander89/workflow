@@ -48,7 +48,7 @@ def latest(conn: sqlite3.Connection, key: str, prefix: str) -> str | None:
     return None
 
 
-def merge_sha(conn: sqlite3.Connection, key: str, repo_slug: str, runner: Runner = _run) -> str | None:
+def merge_sha(conn: sqlite3.Connection, key: str, repo_slug: str, runner: Runner = _run, forge=None) -> str | None:
     """Observe the merge: the commit on main that the PR's merge produced."""
     from wf import forge as _forge
     pr = conn.execute("select detail from ticket_event where ticket_key = ? and kind = 'pr' "
