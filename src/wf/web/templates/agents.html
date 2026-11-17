@@ -2,18 +2,10 @@
 {% block title %}Pipeline{% endblock %}
 {% block content %}
 {% with tab="pipeline" %}{% include "_tabs.html" %}{% endwith %}
-<div class="row between" style="margin-bottom:12px">
-  <div>
-    <h1>Pipeline</h1>
-    <div class="muted">
-      {% for r in repos %}{{ r.name }} · {{ r.path }}{% if not loop.last %} · {% endif %}{% else %}<span class="bad">No repo linked. Add one on Links.</span>{% endfor %}
-      · Claude runs {% if access %}<span class="ok">on</span>{% else %}<span class="bad">off</span>{% endif %}
-      · tests <code>{{ test_cmd }}</code>
-    </div>
-  </div>
-  <div class="row">
-    <form method="post" action="/agents/jira/sync"><button {% if state.running %}disabled{% endif %}>Sync from Jira</button></form>
-  </div>
+<div class="muted" style="margin-bottom:12px">
+  {% for r in repos %}{{ r.name }} · {{ r.path }}{% if not loop.last %} · {% endif %}{% else %}<span class="bad">No repo linked. Add one on Links.</span>{% endfor %}
+  · Claude runs {% if access %}<span class="ok">on</span>{% else %}<span class="bad">off</span>{% endif %}
+  · tests <code>{{ test_cmd }}</code>
 </div>
 
 <div class="panel" style="margin-bottom:14px">
