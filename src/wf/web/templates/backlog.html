@@ -21,6 +21,15 @@
             font-weight:700; display:flex; align-items:center; justify-content:center; }
   .who.unassigned .avatar { background:#252a34; color:#7d8696; }
   .muted-cell { color:#7d8696; font-size:13px; white-space:nowrap; }
+  .hop { border:1px solid #3a3324; background:#15130c; border-radius:12px; padding:14px 16px; margin-bottom:22px; }
+  .hop-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:8px; }
+  .hop h2 { margin:0; font-size:14px; letter-spacing:.05em; text-transform:uppercase; color:#eec13f; }
+  .btn { background:#eec13f; color:#1a1500; border:0; border-radius:8px; padding:9px 14px; font-weight:600; cursor:pointer; }
+  .btn[disabled] { background:#2a2e38; color:#6b7385; cursor:not-allowed; }
+  .btn.ghost { background:transparent; color:#9aa3b2; border:1px solid #2a2e38; font-weight:500; padding:5px 10px; }
+  .bl-check { width:18px; height:18px; accent-color:#eec13f; cursor:pointer; }
+  .bl-foot { display:flex; justify-content:flex-end; margin-top:14px; }
+  .none { color:#7d8696; font-size:14px; padding:6px 0; }
   .empty { padding:40px; text-align:center; color:#7d8696; border:1px dashed #2a2e38; border-radius:10px; }
   @media (max-width: 760px) {
     .bl-table thead { display:none; }
@@ -35,12 +44,31 @@
       {% if sync.run %}Last sync {{ sync.age_text }}.{% else %}Never synced.{% endif %}</p>
   </div>
 </div>
+
+<div class="hop" id="hopper" data-has-sprint="{{ 'yes' if active_sprint else 'no' }}">
+  <div class="hop-head">
+    <h2>Hopper (<span id="hopper-count">0</span>)</h2>
+    <form method="post" action="/board/hopper/to-sprint" id="to-sprint-form" style="margin:0">
+      <span id="hopper-keys"></span>
+      <button class="btn" type="submit" id="move-btn" disabled>
+        {% if active_sprint %}Move to {{ active_sprint.name }}{% else %}No active sprint{% endif %}
+      </button>
+    </form>
+  </div>
+  <table class="bl-table" id="hopper-table" style="display:none">
+    <thead><tr><th>Key</th><th>Ticket</th><th>Assigned to</th><th></th></tr></thead>
+    <tbody id="hopper-body"></tbody>
+  </table>
+  <div class="none" id="hopper-empty">Tick tickets below and press <b>Add to hopper</b>. They wait here until you move them to the sprint.</div>
+</div>
+
 {% if tickets %}
-<table class="bl-table">
-  <thead><tr><th>Key</th><th>Ticket</th><th>State</th><th>Assigned to</th><th>Priority</th><th>Updated</th></tr></thead>
+<table class="bl-table" id="backlog-table">
+  <thead><tr><th style="width:34px"></th><th>Key</th><th>Ticket</th><th>State</th><th>Assigned to</th><th>Priority</th><th>Updated</th></tr></thead>
   <tbody>
   {% for t in tickets %}
-    <tr>
+    <tr class="bl-row" data-key="{{ t.key }}" data-summary="{{ t.summary }}" data-assignee="{{ t.assignee_name or '' }}">
+      <td><input class="bl-check" type="checkbox" aria-label="Select {{ t.key }}"></td>
       <td class="bl-key">{{ t.key }}</td>
       <td class="bl-title"><a href="/board/item/{{ t.key }}">{{ t.summary }}</a></td>
       <td>
@@ -60,7 +88,97 @@
   {% endfor %}
   </tbody>
 </table>
+<div class="bl-foot"><button class="btn" type="button" id="add-to-hopper">Add selected to hopper</button></div>
 {% else %}
 <div class="empty">No backlog tickets. Press <b>Sync from Jira</b> on the Pipeline tab to pull them in.</div>
 {% endif %}
+
+<script>
+(function () {
+  var KEY = "wf.hopper";
+
+  function read() {
+    try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { return []; }
+  }
+  function write(list) {
+    try { localStorage.setItem(KEY, JSON.stringify(list)); } catch (e) {}
+  }
+  function el(tag, text) {
+    var n = document.createElement(tag);
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+
+  // Draw the hopper from storage. Keys that are no longer on this page are dropped.
+  function render() {
+    var hopper = document.getElementById("hopper");
+    if (!hopper) return;
+    var rows = Array.prototype.slice.call(document.querySelectorAll("tr.bl-row"));
+    var present = {};
+    rows.forEach(function (r) { present[r.dataset.key] = true; });
+    var list = read().filter(function (t) { return present[t.key]; });
+    write(list);
+
+    var inHopper = {};
+    list.forEach(function (t) { inHopper[t.key] = true; });
+    rows.forEach(function (r) { r.style.display = inHopper[r.dataset.key] ? "none" : ""; });
+
+    var body = document.getElementById("hopper-body");
+    body.textContent = "";
+    list.forEach(function (t) {
+      var tr = el("tr");
+      tr.appendChild(el("td", t.key)).className = "bl-key";
+      tr.appendChild(el("td", t.summary)).className = "bl-title";
+      tr.appendChild(el("td", t.assignee || "Unassigned"));
+      var td = el("td"); td.style.textAlign = "right";
+      var btn = el("button", "Remove"); btn.type = "button"; btn.className = "btn ghost";
+      btn.setAttribute("data-remove", t.key);
+      td.appendChild(btn); tr.appendChild(td);
+      body.appendChild(tr);
+    });
+    document.getElementById("hopper-table").style.display = list.length ? "" : "none";
+    document.getElementById("hopper-empty").style.display = list.length ? "none" : "";
+    document.getElementById("hopper-count").textContent = list.length;
+    document.getElementById("move-btn").disabled = !(list.length && hopper.dataset.hasSprint === "yes");
+  }
+
+  if (!window.wfHopperWired) {
+    window.wfHopperWired = true;
+    document.addEventListener("click", function (e) {
+      var add = e.target.closest && e.target.closest("#add-to-hopper");
+      if (add) {
+        var list = read();
+        Array.prototype.slice.call(document.querySelectorAll("tr.bl-row")).forEach(function (r) {
+          var box = r.querySelector(".bl-check");
+          if (box && box.checked && !list.some(function (t) { return t.key === r.dataset.key; })) {
+            list.push({ key: r.dataset.key, summary: r.dataset.summary, assignee: r.dataset.assignee });
+          }
+          if (box) box.checked = false;
+        });
+        write(list);
+        render();
+        return;
+      }
+      var rm = e.target.closest && e.target.closest("[data-remove]");
+      if (rm) {
+        write(read().filter(function (t) { return t.key !== rm.getAttribute("data-remove"); }));
+        render();
+      }
+    });
+    document.addEventListener("submit", function (e) {
+      if (e.target.id !== "to-sprint-form") return;
+      var holder = document.getElementById("hopper-keys");
+      holder.textContent = "";
+      read().forEach(function (t) {
+        var input = document.createElement("input");
+        input.type = "hidden"; input.name = "keys"; input.value = t.key;
+        holder.appendChild(input);
+      });
+      write([]); // the move is queued on the server; the hopper empties with it
+    });
+    document.addEventListener("htmx:load", function () { render(); });
+  }
+  render();
+})();
+</script>
 {% endblock %}

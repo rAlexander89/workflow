@@ -90,7 +90,9 @@ def mount_board(app: FastAPI, db_path: Path) -> None:
                 t["updated_text"] = datetime.fromtimestamp(t["jira_updated"]).strftime("%b %d") if t.get("jira_updated") else ""
                 rows.append(t)
             rows.sort(key=lambda t: t.get("jira_updated") or 0, reverse=True)
-            return page(request, "backlog.html", "backlog", tickets=rows, sync=sync_line(c))
+            active = c.execute("select id, name from sprint where state = 'active' order by id limit 1").fetchone()
+            return page(request, "backlog.html", "backlog", tickets=rows,
+                        active_sprint=dict(active) if active else None, sync=sync_line(c))
         finally:
             c.close()
 

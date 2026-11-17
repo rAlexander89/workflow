@@ -120,18 +120,36 @@ def fetch_sync_payload(**kw) -> dict:
     return payload
 
 
-def move_to_sprint(key: str, sprint_id: str, **kw) -> None:
-    """Put one of the user's tickets into a sprint in Jira. Nothing else on the ticket changes."""
-    if not re.fullmatch(r"[A-Z][A-Z0-9]+-\d+", key) or not str(sprint_id).isdigit():
-        raise ValueError("bad ticket key or sprint id")
+def move_tickets_to_sprint(keys: list[str], sprint_id: str, **kw) -> list[str]:
+    """Put the user's tickets into a sprint in Jira, in one session. Returns the keys Jira accepted.
+
+    Nothing else on a ticket changes.
+    """
+    if not str(sprint_id).isdigit() or not keys:
+        raise ValueError("bad sprint id or no tickets")
+    for key in keys:
+        if not re.fullmatch(r"[A-Z][A-Z0-9]+-\d+", key):
+            raise ValueError(f"bad ticket key {key!r}")
+    listing = "\n".join(f"   - {k}" for k in keys)
     out = session(
         "You are the Jira writer for the wf workflow. Use only the Atlassian tools.\n\n"
         "1. Call getAccessibleAtlassianResources and take the first site's id as cloudId.\n"
-        f"2. Call editJiraIssue for issue {key} with fields {{\"customfield_10020\": {int(sprint_id)}}}. Change nothing else.\n\n"
-        'Reply with ONLY one JSON object: {"ok": true} if Jira accepted it, otherwise {"ok": false, "error": "..."}.',
+        f"2. For each issue below, call editJiraIssue with fields {{\"customfield_10020\": {int(sprint_id)}}}. "
+        "Change nothing else.\n" + listing + "\n\n"
+        'Reply with ONLY one JSON object: {"moved": ["KEY", ...], "failed": {"KEY": "reason"}}, listing each key once.',
         allowed=READ_TOOLS + ["mcp__atlassian__editJiraIssue"], **kw)
-    if not isinstance(out, dict) or not out.get("ok"):
-        raise RuntimeError(f"Jira did not move {key} to the sprint: {out}")
+    if not isinstance(out, dict) or not isinstance(out.get("moved"), list):
+        raise RuntimeError(f"Jira did not confirm the sprint move: {out}")
+    moved = [k for k in out["moved"] if k in keys]
+    if not moved:
+        raise RuntimeError(f"Jira moved none of {keys}: {out.get('failed')}")
+    return moved
+
+
+def move_to_sprint(key: str, sprint_id: str, **kw) -> None:
+    """Put one ticket into a sprint in Jira."""
+    if key not in move_tickets_to_sprint([key], sprint_id, **kw):
+        raise RuntimeError(f"Jira did not move {key} to the sprint")
 
 
 def fetch_observations(keys: list[str], **kw) -> dict:
