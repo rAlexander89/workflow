@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ ticket.key }}{% endblock %}
 {% block content %}
+<div id="ticket-live" hx-get="/board/ticket/{{ ticket.key }}" hx-trigger="every 4s" hx-select="#ticket-live" hx-swap="outerHTML">
 <style>
   .head { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; }
   .strip { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 4px; }
@@ -161,5 +162,6 @@
       {% if noise_count %}<div class="meta" style="margin-top:8px">{{ noise_count }} sync update{{ '' if noise_count == 1 else 's' }} hidden</div>{% endif %}
     </div>
   </div>
+</div>
 </div>
 {% endblock %}
