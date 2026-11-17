@@ -392,11 +392,12 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         return work
 
     @app.post("/agents/jira/sync")
-    def jira_sync():
+    def jira_sync(next: str = Form("/agents")):
         c = settings()
         if not _start("jira sync", _jira_sync_work(c)):
             _log("another action is already running")
-        return RedirectResponse("/agents", status_code=303)
+        back = next if next in ("/agents", "/board/backlog") else "/agents"
+        return RedirectResponse(back, status_code=303)
 
     @app.middleware("http")
     async def tunnel_only_webhooks(request: Request, call_next):

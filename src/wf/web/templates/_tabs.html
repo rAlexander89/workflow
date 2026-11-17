@@ -3,9 +3,10 @@
     <a href="/agents" class="{% if tab == 'pipeline' %}on{% endif %}">Pipeline</a>
     <a href="/board/backlog" class="{% if tab == 'backlog' %}on{% endif %}">Backlog</a>
   </nav>
-  {% if tab == 'pipeline' %}
-  <form method="post" action="/agents/jira/sync"><button {% if state.running %}disabled{% endif %}>Sync from Jira</button></form>
-  {% endif %}
+  <form method="post" action="/agents/jira/sync">
+    <input type="hidden" name="next" value="{{ '/board/backlog' if tab == 'backlog' else '/agents' }}">
+    <button {% if state is defined and state.running %}disabled{% endif %}>Sync from Jira</button>
+  </form>
 </div>
 <style>
   .subtabs-row { display:flex; justify-content:space-between; align-items:center; gap:12px; border-bottom:1px solid #2a2e38; margin:0 0 18px; }
