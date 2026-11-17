@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ ticket.key }}{% endblock %}
 {% block content %}
-<div id="ticket-live" hx-get="/board/ticket/{{ ticket.key }}" hx-trigger="every 4s" hx-select="#ticket-live" hx-swap="outerHTML">
+<div id="ticket-status" hx-get="/board/ticket/{{ ticket.key }}" hx-trigger="every 4s" hx-select="#ticket-status" hx-swap="outerHTML">
 <style>
   .head { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; }
   .strip { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 4px; }
@@ -83,6 +83,7 @@
   {% for s in flow %}<span class="step {{ s.state }}">{{ s.label }}</span>{% endfor %}
 </div>
 <div class="muted" style="font-size:12px;margin-top:4px">Yellow: happening now · Green: done · Red: failed at this step · Grey: not started, or skipped</div>
+</div>
 
 <div class="cols">
   <div>
@@ -144,6 +145,7 @@
     </div>
     {% endif %}
 
+    <div id="ticket-history" hx-get="/board/ticket/{{ ticket.key }}" hx-trigger="every 4s" hx-select="#ticket-history" hx-swap="outerHTML">
     <h2>History</h2>
     <div class="panel">
       {% for e in events[:12] %}
@@ -160,6 +162,7 @@
         {% for e in events[12:] %}<div class="item"><b>{{ e.kind }}</b> <span class="meta">{{ e.actor }} · {{ e.when }}</span> <span class="meta">{{ e.from_value or '' }}{% if e.to_value %} → {{ e.to_value }}{% endif %}</span></div>{% endfor %}
       </details>{% endif %}
       {% if noise_count %}<div class="meta" style="margin-top:8px">{{ noise_count }} sync update{{ '' if noise_count == 1 else 's' }} hidden</div>{% endif %}
+    </div>
     </div>
   </div>
 </div>
