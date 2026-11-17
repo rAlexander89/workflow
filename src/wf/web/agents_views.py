@@ -157,6 +157,10 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
     def agents_page(request: Request):
         return page(request, **context())
 
+    @app.get("/agents/board", response_class=HTMLResponse)
+    def board_partial(request: Request):
+        return templates.TemplateResponse(request, "_board.html", context())
+
     def pass_work(c):
         access = c.model.claude_code_access
 

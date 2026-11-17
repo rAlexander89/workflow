@@ -86,7 +86,10 @@ def ensure_worktree(repo: Path, key: str, worktrees: Path) -> Path:
     if branches:
         _git(["worktree", "add", str(path), branch], repo)
     else:
-        _git(["worktree", "add", "-b", branch, str(path), "main"], repo)
+        has_origin = subprocess.run(["git", "rev-parse", "--verify", "--quiet", "origin/main"], cwd=repo,
+                                    capture_output=True).returncode == 0
+        base = "origin/main" if has_origin else "main"
+        _git(["worktree", "add", "-b", branch, str(path), base], repo)
     return path
 
 
