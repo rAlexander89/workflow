@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Callable, Protocol
 
 from wf.domain.board.events import TicketEvent
+from wf.domain.board.payload import SyncResult
 from wf.domain.board.ticket import Ticket
 
 
@@ -87,3 +88,33 @@ class BoardUnitOfWork(Protocol):
     def __enter__(self) -> "BoardUnitOfWork": ...
 
     def __exit__(self, exc_type, exc, tb) -> None: ...
+
+
+class BoardSync(Protocol):
+    """Applies a validated sync payload from the Jira session to the board, in one transaction."""
+
+    def apply(self, data: dict, clock: Callable[[], float]) -> SyncResult:
+        """Raises BoardError, with nothing applied, if the payload is invalid or the sync fails."""
+        ...
+
+
+class BoardQueries(Protocol):
+    """Read-side views of the board, as plain dicts."""
+
+    def status_to_stage(self) -> dict[str, str]: ...
+
+    def active_board(self) -> list[dict]: ...
+
+    def backlog(self) -> list[dict]: ...
+
+    def unmapped_stages(self) -> list[dict]: ...
+
+    def sprints(self, state: str | None = None) -> list[dict]: ...
+
+    def ticket_detail(self, key: str) -> dict | None: ...
+
+    def last_sync(self) -> dict | None: ...
+
+    def counts(self) -> dict:
+        """active_tickets, backlog_tickets, flagged, and unmapped_stages."""
+        ...

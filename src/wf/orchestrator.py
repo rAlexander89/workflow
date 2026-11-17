@@ -12,10 +12,6 @@ exist the supervisor records the handoff and does nothing else.
 
 from __future__ import annotations
 
-import sqlite3
-import time
-from contextlib import closing
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
 
