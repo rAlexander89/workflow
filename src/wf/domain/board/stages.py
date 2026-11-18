@@ -13,23 +13,25 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from wf.domain.shared.stage import Stage
+
 # Order is the order of the workflow. Patterns are matched against the normalized
 # status name (lowercase, punctuation replaced by spaces).
-STAGE_PATTERNS: list[tuple[str, str]] = [
-    ("backlog", r"\bbacklog\b|^open$|^to do$"),
-    ("in_refinement", r"\bin refinement\b"),
-    ("hotfix_review", r"\bhotfix review\b"),
-    ("ready_for_dev", r"\bready for dev\b|\bready for development\b|\bselected for development\b"),
-    ("in_dev", r"\bdev in progress\b|\bin development\b|\bin dev\b|^in progress$"),
-    ("pr_open", r"\bpr open\b|\bpull request open\b"),
-    ("pr_in_review", r"\bpr in review\b|\bin review\b"),
-    ("ready_for_perf_review", r"\bready for perf(ormance)? review\b|\bperf review\b"),
-    ("ready_for_qa", r"\bready for qa\b|\bready for test(ing)?\b"),
-    ("qa_approved", r"\bqa approved\b|\bqa passed\b"),
-    ("merged", r"\bmerged\b"),
-    ("regression", r"\bregression\b"),
-    ("performance", r"\bperformance\b"),
-    ("deployed", r"\bdeployed to dev\b|\bdone\b"),
+STAGE_PATTERNS: list[tuple[Stage, str]] = [
+    (Stage.BACKLOG, r"\bbacklog\b|^open$|^to do$"),
+    (Stage.IN_REFINEMENT, r"\bin refinement\b"),
+    (Stage.HOTFIX_REVIEW, r"\bhotfix review\b"),
+    (Stage.READY_FOR_DEV, r"\bready for dev\b|\bready for development\b|\bselected for development\b"),
+    (Stage.IN_DEV, r"\bdev in progress\b|\bin development\b|\bin dev\b|^in progress$"),
+    (Stage.PR_OPEN, r"\bpr open\b|\bpull request open\b"),
+    (Stage.PR_IN_REVIEW, r"\bpr in review\b|\bin review\b"),
+    (Stage.READY_FOR_PERF_REVIEW, r"\bready for perf(ormance)? review\b|\bperf review\b"),
+    (Stage.READY_FOR_QA, r"\bready for qa\b|\bready for test(ing)?\b"),
+    (Stage.QA_APPROVED, r"\bqa approved\b|\bqa passed\b"),
+    (Stage.MERGED, r"\bmerged\b"),
+    (Stage.REGRESSION, r"\bregression\b"),
+    (Stage.PERFORMANCE, r"\bperformance\b"),
+    (Stage.DEPLOYED, r"\bdeployed to dev\b|\bdone\b"),
 ]
 STAGES = [stage for stage, _ in STAGE_PATTERNS]
 _COMPILED = [(stage, re.compile(pattern)) for stage, pattern in STAGE_PATTERNS]
