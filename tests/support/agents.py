@@ -22,7 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from wf import board, claude_run
+from tests.support import board
+from wf.adapters.runner import claude_code as claude_run
 from wf.adapters.persistence.sqlite.board_queries import SqliteBoardQueries
 from wf.adapters.persistence.sqlite.pause import SqlitePauseState
 from wf.adapters.runner.claude_code import ClaudeCodeRunner
@@ -179,7 +180,7 @@ class _Deploys:
 def pipeline_service(conn: sqlite3.Connection, repo: Path | None = None,
                      dev_deployed: Callable[[str], bool] | None = None) -> PipelineService:
     """The pipeline use cases wired to this board connection and repo."""
-    from wf import observe
+    from tests.support import observe
 
     return PipelineService(
         commands=board._commands(conn), queries=SqliteBoardQueries(conn), pause=SqlitePauseState(conn),

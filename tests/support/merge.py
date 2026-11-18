@@ -13,7 +13,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from wf import board
+from tests.support import board
 from wf.adapters.workspace.git import GitWorkspace, ShellTestRunner
 from wf.application.delivery.merge import MergeService
 from wf.domain.delivery.merge_gate import MergeBlocked  # noqa: F401

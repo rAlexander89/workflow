@@ -16,7 +16,7 @@ import sys
 from dataclasses import dataclass
 from typing import Callable
 
-from wf.model.claude_code import CLAUDE_BIN, KEY_VARS, subscription_env
+from wf.adapters.model.claude_code import CLAUDE_BIN, KEY_VARS, subscription_env
 
 
 @dataclass(frozen=True)

@@ -1,7 +1,7 @@
 import pytest
 
-from wf.events import StatusChange
-from wf.orchestrator import LifecycleStore, Supervisor, route
+from tests.support.events import StatusChange
+from tests.support.orchestrator import LifecycleStore, Supervisor, route
 
 # Test data only. In a real run the mapping comes from the board, per team.
 MAPPING = {
@@ -125,7 +125,7 @@ def test_loop_guard_is_per_ticket(tmp_path):
 
 def test_cli_route_and_kill(tmp_path, capsys):
     from wf.entrypoints import cli
-    from wf.board import connect, sync_file
+    from tests.support.board import connect, sync_file
     import json
 
     db = tmp_path / "wf.sqlite"

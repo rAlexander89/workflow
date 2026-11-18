@@ -1,5 +1,5 @@
 import pytest
-from wf import config as c
+from wf.adapters.config import workspace as c
 
 
 def test_add_repo_dedupes_and_validates():

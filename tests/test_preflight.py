@@ -1,11 +1,12 @@
 import subprocess
 from pathlib import Path
 
-from wf import claude_run, preflight
+from wf.adapters.runner import claude_code as claude_run
+from wf.adapters.system import preflight as preflight
 
 from wf.entrypoints import cli
-from wf.model import claude_code
-from wf.model.claude_code import subscription_env
+from wf.adapters.model import claude_code
+from wf.adapters.model.claude_code import subscription_env
 
 FOUND = lambda name: f"/usr/local/bin/{name}"  # noqa: E731
 MISSING = lambda name: None  # noqa: E731

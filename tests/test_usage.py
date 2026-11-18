@@ -1,6 +1,6 @@
 import pytest
 
-from wf.usage import UsageLedger, UsageRecord, format_audit
+from tests.support.usage import UsageLedger, UsageRecord, format_audit
 
 
 def test_empty_ledger_says_so(tmp_path):

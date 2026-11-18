@@ -1,7 +1,7 @@
 import json
 import subprocess
 
-from wf import forge
+from wf.adapters.forge import forge as forge
 
 URL = "https://git.example.com/acme/app/-/merge_requests/7"
 

@@ -5,13 +5,14 @@ import subprocess
 
 import pytest
 
-from wf import claude_run
+from wf.adapters.runner import claude_code as claude_run
 
 from wf.entrypoints import cli
-from wf import config as cfgmod
-from wf.config import Config, ModelConfig
-from wf.model import Message, ModelError, ModelRequest, ProviderNotAllowed, build_model, known_providers
-from wf.model.claude_code import ClaudeCodeModel
+from wf.adapters.config import workspace as cfgmod
+from wf.adapters.config.workspace import Config, ModelConfig
+from wf.domain.execution.model import Message, ModelError, ModelRequest, ProviderNotAllowed
+from wf.adapters.model import build_model, known_providers
+from wf.adapters.model.claude_code import ClaudeCodeModel
 
 REQ = ModelRequest(system="be brief", messages=(Message("user", "hi"),), max_tokens=64)
 FAKE_BIN = lambda name: "/usr/local/bin/claude"  # noqa: E731

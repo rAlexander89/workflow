@@ -4,7 +4,11 @@ import subprocess
 
 import pytest
 
-from wf import agents, board, claude_run, github_agent, merge
+from tests.support import agents
+from tests.support import board
+from wf.adapters.runner import claude_code as claude_run
+from tests.support import github_agent
+from tests.support import merge
 from tests.test_board import PROJECT, clock, payload, sync, ticket, ticket_row
 
 PROJECT_WITH_MERGED = {**PROJECT, "statuses": PROJECT["statuses"] + [{"name": "Merged to main", "category": "indeterminate"}]}
@@ -336,7 +340,8 @@ def test_code_performance_review_approval_moves_the_ticket_to_qa(conn, repo, tmp
 
 
 def test_a_local_repo_merges_on_its_own_and_counts_as_dev(conn, repo, tmp_path):
-    from wf import merge as merge_mod, observe
+    from tests.support import merge as merge_mod
+    from tests.support import observe
     wt = _branch_with_change(repo, tmp_path)
     _set_stage(conn, "qa_approved")
     for role in ("qa", "pr_review", "perf_review"):
@@ -439,7 +444,8 @@ def test_refinement_takes_turns_product_then_staff(conn):
 
 
 def test_removed_needs_refinement_stage_is_gone_from_the_workflow():
-    from wf import mapping, orchestrator
+    from wf.domain.board import stages as mapping
+    from tests.support import orchestrator
     assert "needs_refinement" not in mapping.STAGES
     assert "needs_refinement" not in orchestrator.STAGE_OWNERS
     assert "needs_refinement" not in agents.STAGE_ROLE
@@ -453,7 +459,7 @@ def _add_ticket(conn, key, stage, sort_order=None):
 
 
 def test_a_ticket_waits_for_its_prerequisite_to_merge_to_dev(conn, repo, tmp_path):
-    from wf import board as _b
+    from tests.support import board as _b
     _set_stage(conn, "deployed")  # the fixture's ticket is not in development
     _add_ticket(conn, "ABC-5", "ready_for_dev")
     _add_ticket(conn, "ABC-6", "pr_open")
@@ -464,7 +470,7 @@ def test_a_ticket_waits_for_its_prerequisite_to_merge_to_dev(conn, repo, tmp_pat
 
 
 def test_a_kicked_back_prerequisite_pauses_the_work_that_depends_on_it(conn, repo, tmp_path):
-    from wf import board as _b
+    from tests.support import board as _b
     _add_ticket(conn, "ABC-7", "in_dev")       # the prerequisite, kicked back to dev
     _add_ticket(conn, "ABC-8", "pr_open")      # depends on it
     _b.add_block(conn, "ABC-7", "ABC-8", actor="staff", reason="needs the first")
@@ -495,7 +501,7 @@ def test_the_dev_takes_the_sprint_order_first_and_unordered_last(conn, repo, tmp
 
 
 def test_pause_stops_a_pass_and_stage_moves_then_resume_restarts_them(conn, repo, tmp_path):
-    from wf import pause
+    from tests.support import pause
     _set_stage(conn, "backlog")
     pause.pause(conn, clock=lambda: 0)
     assert agents.advance_pipeline(conn, repo=repo, dev_deployed=lambda k: False) == []
@@ -508,7 +514,7 @@ def test_pause_stops_a_pass_and_stage_moves_then_resume_restarts_them(conn, repo
 
 
 def test_pause_is_idempotent_and_reports_state(conn):
-    from wf import pause
+    from tests.support import pause
     assert pause.is_paused(conn) is False
     assert pause.pause(conn, clock=lambda: 5) is True
     assert pause.pause(conn, clock=lambda: 6) is False

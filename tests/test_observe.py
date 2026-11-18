@@ -1,7 +1,8 @@
 import json
 import subprocess
 
-from wf import board, observe
+from tests.support import board
+from tests.support import observe
 from tests.test_board import clock, payload, sync, ticket
 
 SHA = "a" * 40
@@ -72,5 +73,5 @@ def test_prod_deploy_starts_only_after_dev_succeeded_on_the_same_commit(tmp_path
 
 def test_the_merge_observer_accepts_the_forge_the_loop_passes():
     import inspect
-    from wf import observe
+    from tests.support import observe
     assert "forge" in inspect.signature(observe.merge_sha).parameters

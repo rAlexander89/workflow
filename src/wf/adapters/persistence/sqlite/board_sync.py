@@ -29,7 +29,6 @@ def _stage_for(conn: sqlite3.Connection, project_key: str, status: str) -> str |
     ).fetchone()
     if row:
         return row["stage"]
-    from wf import mapping
     stages = mapping.stages_for(status)
     return stages[0] if len(stages) == 1 else None
 

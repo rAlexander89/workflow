@@ -25,7 +25,7 @@ import sqlite3
 import time
 from typing import Callable
 
-from wf import mapping
+from wf.domain.board import stages as mapping
 from wf.adapters.persistence.sqlite.board import SqliteBoardUnitOfWork, SqliteStageMappings, SqliteTicketRepository
 from wf.adapters.persistence.sqlite.board_queries import (  # noqa: F401
     active_board, active_sprint, backlog, counts, database_path, keys_in_stages, kicked_back_dependents, last_sync, pipeline_row,

@@ -1,6 +1,7 @@
 import subprocess
 
-from wf import board, github_agent
+from tests.support import board
+from tests.support import github_agent
 from tests.test_board import clock, payload, sync, ticket
 
 ISSUE = "ABC-29"

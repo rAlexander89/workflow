@@ -1,4 +1,4 @@
-from wf.mapping import map_project, normalize, stages_for
+from wf.domain.board.stages import map_project, normalize, stages_for
 
 
 def test_common_status_names_match_one_stage():

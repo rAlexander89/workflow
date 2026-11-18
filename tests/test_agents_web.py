@@ -1,7 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from wf import board, config as cfgmod
+from tests.support import board
+from wf.adapters.config import workspace as cfgmod
 from wf.entrypoints.web.app import create_app
 from tests.test_board import clock, payload, sync, ticket
 

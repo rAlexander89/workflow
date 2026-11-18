@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from wf import board
+from tests.support import board
 from wf.entrypoints import gateway as gateway_server
 from tests.test_board import clock, payload, sync, ticket
 

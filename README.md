@@ -89,12 +89,16 @@ Credentials are never written to it.
 
 | Path | What's there |
 |---|---|
-| `docs/plan.md` | Architecture and decisions. Start here. |
+| `docs/architecture.md` | The layers, ports, and how to extend them. Start here. |
+| `docs/plan.md` | Product decisions and the history of how the flow was built. |
 | `docs/mac-setup.md` | Setup for the Claude Code flow on Apple Silicon Macs. |
 | `prompts/` | The system prompt for each agent role. Project rules come from configuration. |
-| `src/wf/` | Config, Jira client, event intake, supervisor, model adapters, runs, and the CLI. |
-| `src/wf/entrypoints/web/` | A small web app for links and runs. |
-| `tests/` | The test suite. |
+| `src/wf/domain/` | The model and the rules: pure code, no I/O. |
+| `src/wf/application/` | Use cases, and the ports they depend on. |
+| `src/wf/adapters/` | SQLite, git, forges, Jira, models, runners, config files. |
+| `src/wf/entrypoints/` | The CLI, the web app, and the MCP gateway. |
+| `src/wf/bootstrap.py` | The composition root: wires adapters to ports. |
+| `tests/` | The test suite, including the architecture rules in `test_architecture.py`. |
 
 ## License
 

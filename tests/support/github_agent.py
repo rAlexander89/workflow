@@ -13,7 +13,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-from wf import board, github_status
+from tests.support import board
+from wf.adapters.forge import github_status as github_status
 from wf.adapters.persistence.sqlite.board_queries import SqliteBoardQueries
 from wf.adapters.workspace.git import GitWorkspace, run_git
 from wf.application.delivery.merge import MergeBot
@@ -21,7 +22,7 @@ from wf.application.delivery.publish import ATTRIBUTION, PublishBlocked, Publish
 
 
 def _load_repo_links():
-    from wf import config as _cfg
+    from wf.adapters.config import workspace as _cfg
     try:
         return _cfg.load(_cfg.default_path()).repos
     except Exception:
@@ -38,7 +39,7 @@ class _Status:
 
 
 def _service(conn: sqlite3.Connection, repo: Path, runner=None, status=None) -> PublishService:
-    from wf import forge as _forge
+    from wf.adapters.forge import forge as _forge
 
     run = runner or (lambda a, cwd: subprocess.run(a, cwd=cwd, capture_output=True, text=True, check=False))
     link = next((r for r in _load_repo_links() if Path(r.path) == Path(repo)), None)

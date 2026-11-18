@@ -25,7 +25,7 @@ from wf.domain.tracker.changelog import StatusChange  # noqa: F401
 
 def board_status_to_stage(path: Path) -> dict[str, str]:
     """The stage mapping from the board's SQLite file. Empty until a sync has run."""
-    from wf import board
+    from tests.support import board
 
     conn = board.connect(Path(path))
     try:

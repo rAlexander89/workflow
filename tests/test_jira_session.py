@@ -3,8 +3,10 @@ import subprocess
 
 import pytest
 
-from wf import board, jira_session, outbox
-from wf.model import ProviderNotAllowed
+from tests.support import board
+from wf.adapters.tracker import jira_session as jira_session
+from tests.support import outbox
+from wf.domain.execution.model import ProviderNotAllowed
 from tests.test_board import clock, payload, sync, ticket
 
 

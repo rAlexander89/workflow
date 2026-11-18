@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import threading
 
-from wf import github_webhook as gw
+from wf.domain.delivery import github_webhook as gw
 
 SECRET = "s3cret-for-tests"
 
@@ -36,7 +36,8 @@ def test_only_state_changing_events_wake_the_loop():
 def test_the_route_refuses_a_bad_signature_and_wakes_on_a_good_one(tmp_path, monkeypatch):
     import json
     from fastapi.testclient import TestClient
-    from wf import board, config as cfgmod
+    from tests.support import board
+    from wf.adapters.config import workspace as cfgmod
     from wf.entrypoints.web import agents_views
     from wf.entrypoints.web.app import create_app
     monkeypatch.setenv("WF_GITHUB_WEBHOOK_SECRET", SECRET)

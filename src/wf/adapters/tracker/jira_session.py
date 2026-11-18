@@ -15,8 +15,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
-from wf.model import ProviderNotAllowed
-from wf.model.claude_code import CLAUDE_BIN, subscription_env
+from wf.adapters.model.claude_code import CLAUDE_BIN, subscription_env
+from wf.domain.execution.model import ProviderNotAllowed
 
 READ_TOOLS = [
     "mcp__atlassian__getAccessibleAtlassianResources",

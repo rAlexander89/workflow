@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from wf import board, pickup
+from tests.support import board
+from tests.support import pickup
 from tests.test_board import NOW, clock, payload, sprint, sync, ticket, ticket_row, conn  # noqa: F401
 
 

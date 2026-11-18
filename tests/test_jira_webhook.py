@@ -1,4 +1,4 @@
-from wf import jira_webhook
+from wf.domain.tracker import jira_webhook as jira_webhook
 
 
 def test_a_wrong_or_missing_token_is_refused():

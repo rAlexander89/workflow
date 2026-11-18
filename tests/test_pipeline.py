@@ -1,8 +1,8 @@
 import json
 import urllib.parse
 
-from wf.integrations import JiraClient
-from wf.pipeline import Pipeline
+from wf.adapters.tracker.integrations import JiraClient
+from tests.support.pipeline import Pipeline
 
 BODY = {
     "changelog": {

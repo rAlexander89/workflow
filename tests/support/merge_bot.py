@@ -17,7 +17,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-from wf import board, github_status
+from tests.support import board
+from wf.adapters.forge import github_status as github_status
 from wf.adapters.workspace.git import GitWorkspace, run_git
 from wf.application.delivery.merge import MergeBot
 from wf.domain.delivery.merge_gate import Verdict  # noqa: F401

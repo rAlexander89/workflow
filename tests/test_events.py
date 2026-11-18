@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from wf.events import (
+from tests.support.events import (
     ChangeStore,
     Intake,
     StatusChange,
@@ -9,7 +9,7 @@ from wf.events import (
     parse_changelog,
     poll_due,
 )
-from wf.integrations import Check
+from wf.adapters.tracker.integrations import Check
 from wf.entrypoints.web.app import create_app
 
 BODY = {

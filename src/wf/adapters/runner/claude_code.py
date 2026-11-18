@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Callable
 
 from wf.domain.execution.agent_run import AgentRunRequest, RunResult  # noqa: F401
-from wf.model import ProviderNotAllowed
-from wf.model.claude_code import CLAUDE_BIN, subscription_env
+from wf.adapters.model.claude_code import CLAUDE_BIN, subscription_env
+from wf.domain.execution.model import ProviderNotAllowed
 
 GATEWAY_SERVER = "gateway"
 

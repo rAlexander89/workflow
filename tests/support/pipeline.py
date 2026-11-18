@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Callable, Mapping
 
 from wf.application.tracker.triggers import TriggerPipeline
-from wf.events import ChangeStore, Intake, poll_due  # noqa: F401
-from wf.orchestrator import Decision, Dispatch, LifecycleStore, Supervisor, no_agents_wired  # noqa: F401
+from tests.support.events import ChangeStore, Intake, poll_due  # noqa: F401
+from tests.support.orchestrator import Decision, Dispatch, LifecycleStore, Supervisor, no_agents_wired  # noqa: F401
 
 
 class Pipeline(TriggerPipeline):

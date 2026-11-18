@@ -1,7 +1,7 @@
 import json
 import subprocess
 
-from wf import github_status as gs
+from wf.adapters.forge import github_status as gs
 
 
 def fake(payload, code=0):

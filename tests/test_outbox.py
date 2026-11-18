@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from wf import board, outbox
+from tests.support import board
+from tests.support import outbox
 
 from wf.entrypoints import cli
 

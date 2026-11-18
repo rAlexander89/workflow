@@ -16,7 +16,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-from wf import board
+from tests.support import board
 from wf.application.delivery.observer import DeployObserverService
 from wf.domain.delivery.deploys import DEV_WORKFLOW, PROD_WORKFLOW, workflow_state  # noqa: F401
 
@@ -28,7 +28,7 @@ def _run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess:
 
 
 def _service(conn: sqlite3.Connection, runner: Runner = _run, forge=None) -> DeployObserverService:
-    from wf import forge as _forge
+    from wf.adapters.forge import forge as _forge
 
     return DeployObserverService(
         commands=board._commands(conn), forge=forge if forge is not None else _forge.GitHub(runner=runner),
@@ -77,7 +77,7 @@ def prod_deployed(conn: sqlite3.Connection, key: str) -> bool:
 
 def failure_report(repo_slug: str, sha: str, workflow: str | None, runner: Runner = _run, forge=None) -> list[dict]:
     """Why a run failed: each failed job, its link, and the messages the forge attached to it."""
-    from wf import forge as _forge
+    from wf.adapters.forge import forge as _forge
 
     f = forge if forge is not None else _forge.GitHub(runner=runner)
     return DeployObserverService(commands=None, forge=f, forge_for_url=lambda url: f).failure_report(

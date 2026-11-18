@@ -2,8 +2,8 @@ import json
 import subprocess
 import urllib.error
 
-from wf.config import BoardLink, RepoLink
-from wf.integrations import JiraClient, check_repo
+from wf.adapters.config.workspace import BoardLink, RepoLink
+from wf.adapters.tracker.integrations import JiraClient, check_repo
 
 
 def fake_git(stdout="", returncode=0):

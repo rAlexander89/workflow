@@ -21,7 +21,7 @@ def pr_status(url: str, *, runner: Callable[..., subprocess.CompletedProcess] = 
     hit = _cache.get(url)
     if hit and now() - hit[0] < CACHE_SECONDS:
         return hit[1]
-    from wf import forge
+    from wf.adapters.forge import forge
     f = forge.for_url(url)
     if isinstance(f, forge.GitHub):
         f = forge.GitHub(runner=lambda argv, cwd: runner(argv, capture_output=True, text=True, check=False))

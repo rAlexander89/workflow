@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from wf import config as cfgmod
-from wf.integrations import Check
+from wf.adapters.config import workspace as cfgmod
+from wf.adapters.tracker.integrations import Check
 from wf.entrypoints.web.app import create_app
 
 

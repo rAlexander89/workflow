@@ -3,7 +3,7 @@ import sqlite3
 
 import pytest
 
-from wf import board
+from tests.support import board
 
 from wf.entrypoints import cli
 
@@ -487,7 +487,7 @@ def test_assignee_name_and_links_are_stored(conn):
 
 
 def test_a_status_named_open_is_the_to_do_stage(conn):
-    from wf import board as _b
+    from tests.support import board as _b
     assert _b._stage_for(conn, "ABC", "Open") == "backlog"
     assert _b._stage_for(conn, "ABC", "Backlog") == "backlog"
     assert _b._stage_for(conn, "ABC", "PR open") == "pr_open"

@@ -2,7 +2,7 @@
 import pytest
 
 from tests import fakes
-from wf import board
+from tests.support import board
 from wf.adapters.persistence.sqlite.agent_runs import SqliteAgentRuns
 from wf.adapters.persistence.sqlite.changes import SqliteChangeLog
 from wf.adapters.persistence.sqlite.lifecycle import SqliteLifecycleLog

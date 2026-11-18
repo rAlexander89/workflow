@@ -3,7 +3,7 @@ import threading
 
 import pytest
 
-from wf import envs
+from wf.adapters.env import local_app as envs
 from wf.entrypoints import gateway as gateway_server
 
 

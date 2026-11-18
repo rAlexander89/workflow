@@ -14,7 +14,7 @@ import sqlite3
 import time
 from typing import Callable
 
-from wf import board
+from tests.support import board
 from wf.adapters.persistence.sqlite.board_queries import SqliteBoardQueries
 from wf.application.delivery.pickup import (  # noqa: F401
     GatewayError, PickupItem, PickupPlan, PickupService, RoleGateway,

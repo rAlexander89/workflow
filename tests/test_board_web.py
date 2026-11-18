@@ -3,7 +3,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from wf import board, outbox
+from tests.support import board
+from tests.support import outbox
 from wf.entrypoints.web.app import create_app
 from tests.test_board import clock
 

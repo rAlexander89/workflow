@@ -1,4 +1,4 @@
-from wf import graph
+from wf.adapters.workflow import langgraph as graph
 
 
 def test_happy_path_runs_all_stages(tmp_path):

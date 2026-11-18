@@ -2,7 +2,8 @@ import stat
 import subprocess
 import sys
 
-from wf import bots, envs
+from wf.adapters.credentials import bots as bots
+from wf.adapters.env import local_app as envs
 
 
 def test_credentials_are_written_once_with_owner_only_permissions(tmp_path):

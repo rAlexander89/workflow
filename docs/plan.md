@@ -156,7 +156,7 @@ The container runner and the Linux runtime are not built yet.
 ## 10. Build order
 
 1. Done: the board schema in SQLite, and the sync payload from the session (`docs/sync-format.md`).
-2. Done: automatic status mapping (`src/wf/mapping.py`). Unmapped stages are blocked, and
+2. Done: automatic status mapping (`src/wf/domain/board/stages.py`). Unmapped stages are blocked, and
    routing uses the mapping in place of the old fixed status table.
 3. Partly done: `wf status` reports when the board last synced, whether it's stale, and
    what is blocked. The MCP connection itself can only be checked inside the Claude
@@ -167,7 +167,7 @@ The container runner and the Linux runtime are not built yet.
    mapped stage, and every move is logged. `wf flag` lets agents flag a ticket for a
    human, and only the user can clear a flag.
 6. Not yet: gateway tools for agents, then the run loop.
-7. Done: the Jira outbox (`src/wf/outbox.py`, `docs/outbox.md`). Stage moves are queued in
+7. Done: the Jira outbox (`src/wf/application/tracker/outbox.py`, `docs/outbox.md`). Stage moves are queued in
    SQLite. The Jira agent plans them against the observed Jira state, sends at most once,
    and records each result. Comments and field updates are not built yet.
 8. Done: the board UI (`src/wf/entrypoints/web/board_views.py`). Pages for the active sprint, the
@@ -182,7 +182,7 @@ The container runner and the Linux runtime are not built yet.
 - Whether a ticket can belong to two open sprints.
 - Scheduled sync, which needs a Jira API token on the harness.
 - **Allowed moves per role.** The table of (role, from-stage, to-stage) is in
-  `src/wf/board.py` (`ALLOWED_MOVES`) and is enforced when a move is made. It was derived
+  `src/wf/domain/board/moves.py` (`ALLOWED_MOVES`) and is enforced when a move is made. It was derived
   from the agent prompts and is not a complete list of guardrails. It is expected to grow
   as the project does. The actor is still a label the caller gives, so the gateway must
   set it before any agent connects.

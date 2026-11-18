@@ -4,7 +4,11 @@ These cover what the other tests leave open: the stage tables, the thresholds, a
 which `idle_reason` reports why a ticket is stuck. A change that breaks one of these is a change
 in behavior, not a refactor.
 """
-from wf import agents, board, merge, orchestrator, pause
+from tests.support import agents
+from tests.support import board
+from tests.support import merge
+from tests.support import orchestrator
+from tests.support import pause
 from tests.test_agents import _add_ticket, _set_stage, conn, repo  # noqa: F401  (fixtures)
 
 
