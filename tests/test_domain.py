@@ -77,3 +77,20 @@ def test_pickup_skip_reasons_in_priority_order():
     assert skip_reason("active", ["blocked", "needs-human"], None) == "flagged: blocked, needs-human"
     assert skip_reason("active", [], None) == "no Jira status is mapped to in_dev"
     assert skip_reason("active", [], "In Dev") is None
+
+
+def test_every_stage_has_an_owner_so_routing_never_fails():
+    from wf.domain.board.stages import STAGES
+    from wf.domain.delivery.routing import STAGE_OWNERS, route
+    assert set(STAGES) <= set(STAGE_OWNERS)
+    for stage in STAGES:
+        assert route("Any", frozenset(), {"Any": stage}).action in ("dispatch", "merge", "none")
+
+
+def test_a_flagged_ticket_is_never_advanced():
+    from wf.domain.delivery.pipeline import AdvanceFacts, advance_move
+    ok = AdvanceFacts("regression", head="a" * 40, approved_since_regression=frozenset({"qa"}))
+    assert advance_move(ok) is not None
+    assert advance_move(AdvanceFacts("regression", flagged=True, head="a" * 40,
+                                     approved_since_regression=frozenset({"qa"}))) is None
+    assert advance_move(AdvanceFacts("merged", flagged=True, dev_deployed=True)) is None

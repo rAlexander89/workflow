@@ -257,3 +257,12 @@ def test_a_pass_plans_one_dev_and_explains_a_stuck_ticket(pipeline, state):
     assert pipeline.idle_reason("K-1") is None
     state.tickets["K-2"].flags.append("blocked")
     assert "Flagged: blocked" in pipeline.idle_reason("K-2")["why"]
+
+
+def test_the_harness_holds_a_flagged_ticket_even_after_an_approval(pipeline, commands, state):
+    state.tickets["K-2"].stage = "pr_open"
+    commands.record_approval("K-2", "pr_review", "b" * 40)
+    commands.set_flag("K-2", "needs-human", "qa", "not approved after all")
+    assert pipeline.advance() == [] and state.tickets["K-2"].stage == "pr_open"
+    commands.clear_flag("K-2", "needs-human", "user")
+    assert pipeline.advance() == ["K-2"]

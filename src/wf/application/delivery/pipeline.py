@@ -44,6 +44,9 @@ class PipelineService:
             self._move(row["key"], rules.paused_move(row["blocker"]))
             moved.append(row["key"])
         for row in self._queries.keys_in_stages(rules.ADVANCE_STAGES):
+            ticket = self._commands.get(row["key"])
+            if ticket is None or ticket.flags:
+                continue  # held until a person clears the flag
             move = rules.advance_move(self._advance_facts(row["key"], row["stage"]))
             if move is not None:
                 self._move(row["key"], move)

@@ -132,7 +132,8 @@ class Config:
     def from_dict(cls, data: dict[str, Any]) -> "Config":
         cfg = cls()
         for r in data.get("repos", []):
-            cfg.add_repo(r["name"], r["path"], r.get("remote", ""))
+            cfg.add_repo(r["name"], r["path"], r.get("remote", ""), forge=r.get("forge", "github"),
+                         host=r.get("host", ""))
         for b in data.get("boards", []):
             cfg.add_board(b["provider"], b["ref"], b.get("label", ""))
         if "model" in data:

@@ -34,6 +34,7 @@ def paused_move(blocker: str) -> Move:
 class AdvanceFacts:
     """What the harness needs to know to move one ticket along. Sets are roles that approved."""
     stage: str
+    flagged: bool = False  # a person has to clear a flag before the harness moves the ticket
     head: str | None = None  # the branch's current commit, None if the branch does not exist
     dev_deployed: bool = False
     approved_at_head: frozenset[str] = frozenset()
@@ -50,7 +51,10 @@ def advance_move(f: AdvanceFacts) -> Move | None:
       asked for a check, else to deployed)
     - a performance approval of the current commit after performance began passes it
     - a PR review approval of the current commit sends the ticket on to the performance review
+    A flagged ticket is held, whatever it has been approved for: a later flag means a person has to look.
     """
+    if f.flagged:
+        return None
     if f.stage == "merged":
         return Move("regression", "deployed to dev; regression on dev") if f.dev_deployed else None
     if f.head is None:

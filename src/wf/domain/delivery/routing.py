@@ -13,6 +13,8 @@ MAX_DISPATCHES_PER_STATUS = 10  # loop guard; a ticket bouncing this often needs
 #   "planning"      Product and Staff, with the user (refinement)
 #   "dev"           the Dev agent
 #   "pr_review"     the PR review agent
+#   "perf_review"   the performance reviewer of the code
+#   "performance"   the performance agent, when the dev asked for a check
 #   "qa"            the QA agent
 #   "harness:merge" the harness merges to the internal main once both approvals exist
 STAGE_OWNERS: dict[str, str | None] = {
@@ -23,10 +25,12 @@ STAGE_OWNERS: dict[str, str | None] = {
     "in_dev": "dev",
     "pr_open": "pr_review",
     "pr_in_review": "pr_review",
+    "ready_for_perf_review": "perf_review",
     "ready_for_qa": "qa",
     "qa_approved": "harness:merge",
     "merged": None,  # CI deploys the internal main to the dev environment
     "regression": "qa",
+    "performance": "performance",
     "deployed": None,  # the performance agent picks these up later
 }
 

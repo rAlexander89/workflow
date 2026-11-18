@@ -21,10 +21,12 @@ def test_stage_owner_table():
         "in_dev": "dev",
         "pr_open": "pr_review",
         "pr_in_review": "pr_review",
+        "ready_for_perf_review": "perf_review",
         "ready_for_qa": "qa",
         "qa_approved": "harness:merge",
         "merged": None,
         "regression": "qa",
+        "performance": "performance",
         "deployed": None,
     }
     assert orchestrator.HOTFIX_LABEL == "hotfix"

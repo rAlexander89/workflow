@@ -38,3 +38,15 @@ def test_run_and_resume_through_cli(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "steps: product -> staff -> gate -> dev -> qa" in out
     assert "status: done" in out
+
+
+def test_a_linked_repo_keeps_its_forge_and_host_when_the_config_is_read_again(tmp_path):
+    from wf.adapters.config import workspace as cfgmod
+    path = tmp_path / "workflow.json"
+    cfg = cfgmod.Config()
+    cfg.add_repo("a", "/x", "g/a", forge="gitlab", host="git.example.com")
+    cfg.add_repo("b", "/y", forge="local")
+    cfgmod.save(cfg, path)
+    again = cfgmod.load(path)
+    assert [(r.name, r.forge, r.host, r.remote) for r in again.repos] == [
+        ("a", "gitlab", "git.example.com", "g/a"), ("b", "local", "", "")]
