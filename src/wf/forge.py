@@ -16,23 +16,13 @@ from pathlib import Path
 from typing import Callable
 from typing import Protocol
 
+from wf.domain.delivery.checks import pairs_state as checks_state  # noqa: F401
+
 Runner = Callable[[list[str], Path], "subprocess.CompletedProcess[str]"]
 
 
 def _run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=False)
-
-
-def checks_state(conclusions: list[tuple[str, str]]) -> str:
-    """(status, conclusion) pairs -> 'none', 'pending', 'failed', or 'passed'."""
-    if not conclusions:
-        return "none"
-    failed = {"FAILURE", "ERROR", "CANCELED", "CANCELLED", "TIMED_OUT", "FAILED", "CANCELED"}
-    if any((c or "").upper() in failed for _, c in conclusions):
-        return "failed"
-    if any((s or "").upper() not in ("COMPLETED", "SUCCESS", "SUCCESSFUL", "PASSED") for s, _ in conclusions):
-        return "pending"
-    return "passed"
 
 
 class Forge(Protocol):

@@ -10,20 +10,10 @@ import subprocess
 import time
 from typing import Callable
 
-FAILED = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
+from wf.domain.delivery.checks import rollup_state as checks_state  # noqa: F401
+
 _cache: dict[str, tuple[float, dict]] = {}
 CACHE_SECONDS = 30
-
-
-def checks_state(rollup: list[dict]) -> str:
-    """'none', 'pending', 'failed', or 'passed' for a PR's check runs."""
-    if not rollup:
-        return "none"
-    if any((c.get("conclusion") or "").upper() in FAILED for c in rollup):
-        return "failed"
-    if any((c.get("status") or "").upper() != "COMPLETED" for c in rollup):
-        return "pending"
-    return "passed"
 
 
 def pr_status(url: str, *, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
