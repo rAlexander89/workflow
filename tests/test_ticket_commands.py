@@ -191,3 +191,69 @@ def test_an_ack_makes_a_sent_item_final_and_a_stuck_one_can_be_retried(commands,
         outbox.retry(1)
     with pytest.raises(BoardError, match="no outbox item 7"):
         outbox.retry(7)
+
+
+# --- the pipeline service, with every port in memory ------------------------------------------------
+
+from tests.fakes import MemoryAgentRuns, MemoryBoardQueries, MemoryPauseState  # noqa: E402
+from wf.application.delivery.pipeline import PipelineService  # noqa: E402
+
+
+class FakeWorkspace:
+    def __init__(self, heads):
+        self.heads = heads
+
+    def branch_head(self, key):
+        return self.heads.get(key)
+
+
+class FakeDeploys:
+    def __init__(self, deployed=()):
+        self.deployed = set(deployed)
+
+    def dev_deployed(self, key):
+        return key in self.deployed
+
+
+@pytest.fixture
+def pipeline(state, commands):
+    state.sprint_state.update({"K-1": "active", "K-2": "active"})
+    svc = PipelineService(commands=commands, queries=MemoryBoardQueries(state), pause=MemoryPauseState(),
+                          runs=MemoryAgentRuns(), workspace=FakeWorkspace({"K-1": "a" * 40, "K-2": "b" * 40}),
+                          deploys=FakeDeploys())
+    return svc
+
+
+def test_advance_moves_a_reviewed_ticket_on_and_a_sprint_backlog_ticket_into_refinement(pipeline, commands, state):
+    state.add_ticket("K-3", "backlog")
+    state.sprint_state["K-3"] = "active"
+    state.tickets["K-2"].stage = "pr_open"
+    commands.record_approval("K-2", "pr_review", "b" * 40)
+    assert pipeline.advance() == ["K-3", "K-2"]
+    assert state.tickets["K-3"].stage == "in_refinement" and state.tickets["K-2"].stage == "ready_for_perf_review"
+    assert ("stage", "harness", "pr_open", "ready_for_perf_review") in kinds(state, "K-2")
+
+
+def test_advance_does_nothing_while_paused_and_waits_for_the_deploy(pipeline, state):
+    state.tickets["K-1"].stage = "merged"
+    assert pipeline.advance() == []
+    pipeline._deploys.deployed.add("K-1")
+    pipeline._pause.pause("by a person", 5)
+    assert pipeline.advance() == [] and state.tickets["K-1"].stage == "merged"
+    pipeline._pause.resume(6)
+    assert pipeline.advance() == ["K-1"] and state.tickets["K-1"].stage == "regression"
+
+
+def test_an_approval_of_an_old_commit_does_not_advance_a_ticket(pipeline, commands, state):
+    state.tickets["K-2"].stage = "pr_open"
+    commands.record_approval("K-2", "pr_review", "0" * 40)
+    assert pipeline.advance() == [] and state.tickets["K-2"].stage == "pr_open"
+
+
+def test_a_pass_plans_one_dev_and_explains_a_stuck_ticket(pipeline, state):
+    state.tickets["K-2"].stage = "ready_for_dev"
+    plan = pipeline.plan_pass()
+    assert [(a.key, a.role, a.skipped) for a in plan] == [("K-1", "dev", None), ("K-2", "dev", "dev is busy with K-1")]
+    assert pipeline.idle_reason("K-1") is None
+    state.tickets["K-2"].flags.append("blocked")
+    assert "Flagged: blocked" in pipeline.idle_reason("K-2")["why"]

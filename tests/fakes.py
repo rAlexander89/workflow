@@ -181,6 +181,7 @@ class MemoryBoardState:
         self.links: list[list] = []  # [prerequisite, dependent, synced]
         self.mappings: dict[tuple[str, str], str] = {}
         self.outbox: list[dict] = []
+        self.sprint_state: dict[str, str] = {}
 
     def add_ticket(self, key, stage, project_key="P", **kw):
         self.tickets[key] = Ticket(key, project_key, stage, **kw)
@@ -309,3 +310,43 @@ class MemoryBoardUnitOfWork:
         if exc_type is not None:
             self.state.__dict__.clear()
             self.state.__dict__.update(self._snapshot)
+
+
+class MemoryBoardQueries:
+    """The pipeline queries over MemoryBoardState. Sprint state is set per ticket in `sprint_state`."""
+
+    def __init__(self, state: MemoryBoardState):
+        self._s = state
+
+    def _live(self):
+        return [t for t in self._s.tickets.values() if not t.removed]
+
+    def _row(self, t):
+        return {"key": t.key, "summary": t.summary, "stage": t.stage, "flags": list(t.flags),
+                "sort_order": t.sort_order, "sprint_state": self._s.sprint_state.get(t.key)}
+
+    def pipeline_rows(self):
+        return [self._row(t) for t in self._live() if t.stage is not None]
+
+    def pipeline_row(self, key):
+        t = self._s.tickets.get(key)
+        return None if t is None or t.removed else self._row(t)
+
+    def sprint_backlog_keys(self):
+        return sorted(t.key for t in self._live() if t.stage == "backlog" and self._s.sprint_state.get(t.key) == "active")
+
+    def kicked_back_dependents(self, stages):
+        out = []
+        for t in self._live():
+            if t.stage in stages and self._s.sprint_state.get(t.key) == "active":
+                for blocker in sorted(l[0] for l in self._s.links if l[1] == t.key):
+                    if self._s.tickets[blocker].stage == "in_dev":
+                        out.append({"key": t.key, "blocker": blocker})
+                        break
+        return sorted(out, key=lambda r: r["key"])
+
+    def keys_in_stages(self, stages):
+        return [{"key": t.key, "stage": t.stage} for t in self._live() if t.stage in stages]
+
+    def stage_by_key(self):
+        return {t.key: t.stage for t in self._live() if t.stage is not None}
