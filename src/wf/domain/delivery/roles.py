@@ -2,34 +2,37 @@
 
 from __future__ import annotations
 
+from wf.domain.shared.roles import Role
+from wf.domain.shared.stage import Stage
+
 # Which role runs in each stage. Stages not listed have no agent.
-STAGE_ROLE: dict[str, str | None] = {
-    "in_refinement": "product",  # product and staff take turns here: see next_refinement_role
-    "hotfix_review": "staff",
-    "ready_for_dev": "dev",
-    "in_dev": "dev",
-    "pr_open": "pr_review",
-    "pr_in_review": "pr_review",
-    "ready_for_perf_review": "perf_review",
-    "ready_for_qa": "qa",
-    "merged": None,  # the harness moves it on to regression
-    "regression": "qa",
-    "performance": "performance",
+STAGE_ROLE: dict[Stage, Role | None] = {
+    Stage.IN_REFINEMENT: Role.PRODUCT,  # product and staff take turns here: see next_refinement_role
+    Stage.HOTFIX_REVIEW: Role.STAFF,
+    Stage.READY_FOR_DEV: Role.DEV,
+    Stage.IN_DEV: Role.DEV,
+    Stage.PR_OPEN: Role.PR_REVIEW,
+    Stage.PR_IN_REVIEW: Role.PR_REVIEW,
+    Stage.READY_FOR_PERF_REVIEW: Role.PERF_REVIEW,
+    Stage.READY_FOR_QA: Role.QA,
+    Stage.MERGED: None,  # the harness moves it on to regression
+    Stage.REGRESSION: Role.QA,
+    Stage.PERFORMANCE: Role.PERFORMANCE,
 }
 
-REFINEMENT_STAGES = ("in_refinement",)
+REFINEMENT_STAGES = (Stage.IN_REFINEMENT,)
 MAX_RUNS_PER_STAGE = 3  # loop guard: a ticket that fails this often in a row needs a human
 MAX_REFINEMENT_ROUNDS = 7  # product rounds without the staff bot's agreement: a person is asked
-DONE_FOR_BLOCKING = ("merged", "regression", "performance", "deployed")  # a prerequisite is on dev
-PAUSABLE = ("in_dev", "pr_open", "pr_in_review")  # dev-owned work a kicked-back prerequisite interrupts
+DONE_FOR_BLOCKING = (Stage.MERGED, Stage.REGRESSION, Stage.PERFORMANCE, Stage.DEPLOYED)  # a prerequisite is on dev
+PAUSABLE = (Stage.IN_DEV, Stage.PR_OPEN, Stage.PR_IN_REVIEW)  # dev-owned work a kicked-back prerequisite interrupts
 
 # A ticket merges only when each of these roles approved its current commit.
-REQUIRED_APPROVALS = frozenset({"pr_review", "perf_review", "qa"})
+REQUIRED_APPROVALS = frozenset({Role.PR_REVIEW, Role.PERF_REVIEW, Role.QA})
 
 
 def next_refinement_role(last_role: str | None) -> str:
     """Whose turn it is in refinement: product goes first, then staff, and so on."""
-    return "product" if last_role is None or last_role == "staff" else "staff"
+    return Role.PRODUCT if last_role is None or last_role == Role.STAFF else Role.STAFF
 
 
 def refinement_limit_reached(product_rounds: int) -> bool:

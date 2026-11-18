@@ -68,7 +68,7 @@ separate from the sync (see `docs/plan.md`, section 2).
 ## What the tool does with it
 
 - **Mapping:** statuses are matched to internal stages by name. Stages without exactly one
-  matching status are reported as blocked. See `src/wf/mapping.py`.
+  matching status are reported as blocked. See `src/wf/domain/board/stages.py`.
 - **Active sync:** tickets missing from the payload, or moved out of an active sprint, are
   marked removed. Their rows and history are kept.
 - **Past sync:** never overwrites a ticket whose current sprint is active.
