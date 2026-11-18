@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from wf.domain.shared.sprint import SprintState
+from wf.domain.shared.stage import Stage
 from wf.domain.delivery.roles import (
     MAX_RUNS_PER_STAGE, REFINEMENT_STAGES, STAGE_ROLE, refinement_limit_reached, run_limit_reached,
 )
@@ -133,7 +135,7 @@ def is_candidate(t: PassTicket) -> bool:
     role = STAGE_ROLE.get(t.stage)
     if t.stage in REFINEMENT_STAGES:
         role = "product"  # the actual turn is a fact: see TicketFacts.refinement_role
-    return role is not None and t.sprint_state == "active" and not t.flags
+    return role is not None and t.sprint_state == SprintState.ACTIVE and not t.flags
 
 
 def plan_pass(tickets: list[PassTicket], facts: dict[str, TicketFacts]) -> list[PlannedAction]:
@@ -143,7 +145,7 @@ def plan_pass(tickets: list[PassTicket], facts: dict[str, TicketFacts]) -> list[
     its prerequisites are on dev. A ticket in refinement gets at most MAX_REFINEMENT_ROUNDS product
     rounds before a person is asked.
     """
-    dev_busy = next((t.key for t in tickets if t.stage == "in_dev" and t.sprint_state == "active"), None)
+    dev_busy = next((t.key for t in tickets if t.stage == Stage.IN_DEV and t.sprint_state == SprintState.ACTIVE), None)
     actions: list[PlannedAction] = []
     for t in work_order(tickets):
         if not is_candidate(t):
@@ -172,7 +174,7 @@ def plan_pass(tickets: list[PassTicket], facts: dict[str, TicketFacts]) -> list[
                 action.skipped = f"waiting for {', '.join(f.unmet_blockers)} to merge to dev"
                 actions.append(action)
                 continue
-        if t.stage == "in_dev" and dev_busy != t.key:
+        if t.stage == Stage.IN_DEV and dev_busy != t.key:
             action.skipped = f"dev is busy with {dev_busy}"
             actions.append(action)
             continue
@@ -211,7 +213,7 @@ def idle_reason(f: IdleFacts) -> dict | None:
         return {"why": f"Flagged: {', '.join(f.flags)}. Clear the flag first.", "can_run": False}
     if f.role is None:
         return None  # nothing is expected to happen here (backlog, done): no notice
-    if f.sprint_state != "active":
+    if f.sprint_state != SprintState.ACTIVE:
         return {"why": "Not in an active sprint, so no agent picks it up.", "can_run": False}
     if f.stage in REFINEMENT_STAGES:
         if refinement_limit_reached(f.product_rounds):

@@ -5,6 +5,7 @@ import pytest
 
 from tests.fakes import MemoryAgentRuns, MemoryBoardState, MemoryBoardUnitOfWork
 from wf.application.board.tickets import TicketCommands
+from wf.bootstrap import build_event_bus
 from wf.application.execution.agent import AgentRunService
 from wf.domain.board.errors import BoardError
 from wf.domain.execution import agent_run
@@ -80,7 +81,7 @@ class Queries:
 def parts():
     state = MemoryBoardState()
     state.add_ticket("K-1", "regression")
-    commands = TicketCommands(lambda: MemoryBoardUnitOfWork(state), lambda: 1000.0)
+    commands = TicketCommands(lambda: MemoryBoardUnitOfWork(state), lambda: 1000.0, build_event_bus())
     runs, runner, ws = MemoryAgentRuns(), Runner(), Workspace()
     svc = AgentRunService(commands=commands, queries=Queries(detail("regression")), runs=runs, workspace=ws,
                           runner=runner, prompts=Prompts(), runs_dir=Path("/runs"), clock=lambda: 1000.0)

@@ -3,6 +3,7 @@ import pytest
 
 from tests.fakes import MemoryBoardState, MemoryBoardUnitOfWork
 from wf.application.board.tickets import TicketCommands
+from wf.bootstrap import build_event_bus
 from wf.domain.board.errors import BoardError
 from wf.domain.board.events import TicketEvent, approvals_at, approvals_since_stage, changed_since, perf_requested
 
@@ -18,7 +19,7 @@ def state():
 
 @pytest.fixture
 def commands(state):
-    return TicketCommands(lambda: MemoryBoardUnitOfWork(state), lambda: 100.0)
+    return TicketCommands(lambda: MemoryBoardUnitOfWork(state), lambda: 100.0, build_event_bus())
 
 
 def kinds(state, key):

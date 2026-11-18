@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from wf.domain.board.events import TicketEvent
+from wf.domain.board.events import DomainEvent, TicketEvent
 from wf.domain.board.ticket import Ticket
 
 
@@ -23,15 +23,17 @@ class SqliteTicketRepository:
         return Ticket(row["key"], row["project_key"], row["stage"], json.loads(row["flags"] or "[]"),
                       row["removed_at"] is not None, row["sort_order"], row["jira_status"], row["summary"])
 
-    def save(self, ticket: Ticket) -> None:
+    def save(self, ticket: Ticket) -> list[DomainEvent]:
         self._conn.execute("update ticket set stage = ?, flags = ?, sort_order = ? where key = ?",
                            (ticket.stage, json.dumps(ticket.flags), ticket.sort_order, ticket.key))
-        for e in ticket.events:
+        events = ticket.pull_events()
+        for event in events:
+            e = event.record()
             self._conn.execute(
                 "insert into ticket_event (ticket_key, at, actor, kind, from_value, to_value, detail) "
                 "values (?, ?, ?, ?, ?, ?, ?)",
-                (e.ticket_key, e.at, e.actor, e.kind, e.from_value, e.to_value, e.detail))
-        ticket.events.clear()
+                (e.ticket_key, e.at, str(e.actor), e.kind, e.from_value, e.to_value, e.detail))
+        return events
 
     def history(self, key: str) -> list[TicketEvent]:
         rows = self._conn.execute(

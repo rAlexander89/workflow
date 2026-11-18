@@ -23,6 +23,7 @@ from wf.domain.board.errors import BoardError
 from wf.domain.delivery import github_webhook
 from wf.domain.delivery.branches import branch_for
 from wf.domain.delivery.roles import STAGE_ROLE
+from wf.domain.shared.ticket_key import TicketKey
 from wf.domain.tracker import jira_webhook
 from wf.entrypoints.web import activity
 from wf.entrypoints.web import pipeline as stage_view
@@ -312,8 +313,7 @@ def mount_agents(app: FastAPI, container: Container) -> None:
     @app.post("/board/hopper/to-sprint")
     def hopper_to_sprint(keys: list[str] = Form(default=[])):
         """Move the tickets the browser sent into the active sprint, in one Jira write. Nothing is stored here."""
-        import re as _re
-        keys = [k for k in keys if _re.fullmatch(r"[A-Z][A-Z0-9]+-\d+", k)]
+        keys = [k for k in keys if TicketKey.is_valid(k)]
         settings = container.settings()
         sprint = _active_sprint()
         if sprint is None or not keys:
@@ -331,8 +331,7 @@ def mount_agents(app: FastAPI, container: Container) -> None:
     @app.post("/board/item/{key}/to-sprint")
     def move_to_sprint(key: str):
         """The user asks for one of their tickets to join the active sprint. Jira is written, then read back."""
-        import re as _re
-        if not _re.fullmatch(r"[A-Z][A-Z0-9]+-\d+", key):
+        if not TicketKey.is_valid(key):
             raise HTTPException(400, "bad ticket key")
         settings = container.settings()
         sprint = _active_sprint()

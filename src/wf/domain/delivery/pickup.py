@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-PICKUP_FROM = "ready_for_dev"
-PICKUP_TO = "in_dev"
+from wf.domain.shared.sprint import SprintState
+from wf.domain.shared.stage import Stage
+
+PICKUP_FROM = Stage.READY_FOR_DEV
+PICKUP_TO = Stage.IN_DEV
 
 
 def skip_reason(sprint_state: str | None, flags: list[str], jira_target: str | None) -> str | None:
     """Why a ready ticket is not picked up, or None when it can be."""
-    if sprint_state != "active":
+    if sprint_state != SprintState.ACTIVE:
         return "not in an active sprint"
     if flags:
         return f"flagged: {', '.join(flags)}"

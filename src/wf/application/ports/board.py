@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Protocol
 
-from wf.domain.board.events import TicketEvent
+from wf.domain.board.events import DomainEvent, TicketEvent
 from wf.domain.board.payload import SyncResult
 from wf.domain.board.ticket import Ticket
 
@@ -14,8 +14,9 @@ class TicketRepository(Protocol):
         """The ticket, including one removed from scope (see `Ticket.removed`), or None if unknown."""
         ...
 
-    def save(self, ticket: Ticket) -> None:
-        """Write the ticket's stage, flags, and order, and append its new events (then clear them)."""
+    def save(self, ticket: Ticket) -> list[DomainEvent]:
+        """Write the ticket's stage, flags, and order, and the history record of each event it recorded.
+        Returns those events, so the caller can publish them."""
         ...
 
     def history(self, key: str) -> list[TicketEvent]:

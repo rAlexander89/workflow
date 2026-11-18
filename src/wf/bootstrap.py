@@ -43,6 +43,7 @@ from wf.adapters.workflow.engine import LangGraphEngine
 from wf.adapters.workspace.onboarding import GitRepoFinder
 from wf.adapters.workspace.git import GitWorkspace, ShellTestRunner
 from wf.application.board.tickets import TicketCommands
+from wf.application.events import EventBus
 from wf.application.delivery.deploy_graph import DeployGraphService
 from wf.application.delivery.merge import MergeBot, MergeService
 from wf.application.delivery.observer import DeployObserverService
@@ -60,6 +61,8 @@ from wf.application.ports.harness import ActivityLog, TaskRunner
 from wf.application.ports.setup import AppEnvironment, BotAccounts, MachineChecks, RepoFinder
 from wf.application.settings import RepoSettings, Settings
 from wf.domain.board.errors import BoardError
+from wf.domain.board.events import TicketMoved
+from wf.application.tracker.handlers import on_ticket_moved
 from wf.application.tracker.intake import Intake
 from wf.application.tracker.outbox import OutboxService
 from wf.application.tracker.supervisor import Supervisor, no_agents_wired
@@ -76,6 +79,13 @@ class _NoRepoWorkspace:
         def refuse(*args, **kwargs):
             raise BoardError("no internal repo is linked; add one on the Links page")
         return refuse
+
+
+def build_event_bus() -> EventBus:
+    """The subscriptions: who reacts to which domain event."""
+    bus = EventBus()
+    bus.subscribe(TicketMoved, on_ticket_moved)  # a move on the board queues the matching move in Jira
+    return bus
 
 
 class NullLog:
@@ -114,7 +124,7 @@ class Session:
     def __init__(self, container: "Container", conn: sqlite3.Connection):
         self._c = container
         self.conn = conn
-        self.tickets = TicketCommands(lambda: SqliteBoardUnitOfWork(conn), container.clock)
+        self.tickets = TicketCommands(lambda: SqliteBoardUnitOfWork(conn), container.clock, container.events)
         self.queries = SqliteBoardQueries(conn)
         self.pause = SqlitePauseState(conn)
         self.agent_runs = SqliteAgentRuns(conn)
@@ -221,6 +231,7 @@ class Container:
         self.log: ActivityLog = log or NullLog()
         self.runner_secret = os.environ.get("WF_RUNNER_SECRET", "") if runner_secret is None else runner_secret
         self.claude_bin = claude_bin or (lambda: shutil.which(claude_code.CLAUDE_BIN))
+        self.events = build_event_bus()
         self.deploy_cache: dict = {}  # shared by every request: the deploy graph is cached briefly
 
     @staticmethod

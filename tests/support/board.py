@@ -37,6 +37,7 @@ from wf.adapters.persistence.sqlite.board_sync import (  # noqa: F401
 )
 from wf.adapters.persistence.sqlite.schema import LINK_SCHEMA, SCHEMA, SCHEMA_VERSION, connect  # noqa: F401
 from wf.application.board.tickets import TicketCommands
+from wf.bootstrap import build_event_bus
 from wf.domain.board.errors import BoardError  # noqa: F401
 from wf.domain.board import events
 from wf.domain.board.events import TicketEvent
@@ -49,7 +50,7 @@ from wf.domain.board.payload import (  # noqa: F401
 
 def _commands(conn: sqlite3.Connection, clock: Callable[[], float] = time.time) -> TicketCommands:
     """Ticket commands over this connection. The legacy functions below call them."""
-    return TicketCommands(lambda: SqliteBoardUnitOfWork(conn), clock)
+    return TicketCommands(lambda: SqliteBoardUnitOfWork(conn), clock, build_event_bus())
 
 
 # --- local changes made by the harness and by agents ----------------------------------

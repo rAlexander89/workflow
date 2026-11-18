@@ -200,8 +200,9 @@ class MemoryTicketRepository:
     def save(self, ticket):
         self._s.tickets[ticket.key] = Ticket(ticket.key, ticket.project_key, ticket.stage, list(ticket.flags),
                                              ticket.removed, ticket.sort_order, ticket.jira_status, ticket.summary)
-        self._s.history.setdefault(ticket.key, []).extend(ticket.events)
-        ticket.events.clear()
+        events = ticket.pull_events()
+        self._s.history.setdefault(ticket.key, []).extend(e.record() for e in events)
+        return events
 
     def history(self, key):
         return list(self._s.history.get(key, []))

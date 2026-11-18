@@ -6,8 +6,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from wf.domain.board.errors import BoardError
+from wf.domain.shared.sprint import SprintState
 
-SPRINT_STATES = ("future", "active", "closed")
+SPRINT_STATES = tuple(SprintState)
 STATUS_CATEGORIES = ("new", "indeterminate", "done")
 SYNC_KINDS = ("active", "past", "backlog")
 

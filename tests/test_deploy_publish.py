@@ -5,6 +5,7 @@ import pytest
 
 from tests.fakes import MemoryBoardQueries, MemoryBoardState, MemoryBoardUnitOfWork
 from wf.application.board.tickets import TicketCommands
+from wf.bootstrap import build_event_bus
 from wf.application.delivery.merge import MergeBot
 from wf.application.delivery.observer import DeployObserverService
 from wf.application.delivery.publish import PublishBlocked, PublishService, PublishTarget
@@ -63,7 +64,7 @@ class Forge:
 def board_parts():
     state = MemoryBoardState()
     state.add_ticket("K-1", "merged", summary="add search")
-    commands = TicketCommands(lambda: MemoryBoardUnitOfWork(state), lambda: 9.0)
+    commands = TicketCommands(lambda: MemoryBoardUnitOfWork(state), lambda: 9.0, build_event_bus())
     return state, commands
 
 

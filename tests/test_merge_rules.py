@@ -5,6 +5,7 @@ import pytest
 
 from tests.fakes import MemoryBoardState, MemoryBoardUnitOfWork
 from wf.application.board.tickets import TicketCommands
+from wf.bootstrap import build_event_bus
 from wf.application.delivery.merge import MergeBot, MergeService
 from wf.domain.delivery import merge_gate
 from wf.domain.delivery.merge_gate import MergeBlocked, PullRequestFacts, approval_block, stage_block, verdict
@@ -85,7 +86,7 @@ class Tests:
 def parts():
     state = MemoryBoardState()
     state.add_ticket("K-1", "qa_approved")
-    commands = TicketCommands(lambda: MemoryBoardUnitOfWork(state), lambda: 50.0)
+    commands = TicketCommands(lambda: MemoryBoardUnitOfWork(state), lambda: 50.0, build_event_bus())
     for role in ("pr_review", "perf_review", "qa"):
         commands.record_approval("K-1", role, HEAD)
     return state, commands
