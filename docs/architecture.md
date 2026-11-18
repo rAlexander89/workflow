@@ -31,17 +31,51 @@ Dependencies point inward, and one module wires everything together.
 library (`sqlite3`, `subprocess`, `httpx`, `fastapi`, `urllib.request`, ...) or read the clock or environment
 (`time.time`, `os.environ`).
 
-## Bounded contexts
+## Domain model (DDD)
 
-Each context has its own package under `domain/` and use cases under `application/`.
+The domain is split into bounded contexts plus a small shared kernel. A context stands alone: it imports the
+shared kernel and itself, never another context. `tests/test_architecture.py` enforces that.
 
-| Context | Owns |
+### Ubiquitous language (shared kernel, `wf/domain/shared`)
+
+| Term | Meaning |
 |---|---|
-| **board** | Ticket (the aggregate), stages, who may move a ticket, flags, approvals, blocks, the Jira status mapping, the sync payload |
-| **delivery** | Stage owners and routing, the pipeline's decisions (advance, plan a pass, why a ticket is idle), the merge gate and merge bot, pickup, deploys, publishing |
-| **execution** | An agent run: its brief, gateway environment, and result; model usage; the model vocabulary; the gateway's rules |
-| **tracker** | Jira status changes, the changelog, when to poll, the outbox of moves waiting for Jira |
-| **workspace** | Which repos and boards are linked, and how the harness is configured |
+| **Stage** (`Stage`) | A step in the internal workflow: backlog, in_refinement, ready_for_dev, in_dev, pr_open, ..., deployed. A Jira status maps to at most one stage. |
+| **Role** (`Role`) | An agent role: product, staff, dev, oncall, pr_review, perf_review, qa, performance. |
+| **Actor** (`Actor`) | Who leaves a mark on a ticket that is not a role: user, harness, sync, outbox, jira-agent, observer, merge_bot. |
+| **Ticket key** (`TicketKey`) | A validated `PROJECT-123`. |
+| **Commit** (`CommitSha`) | A git commit. An approval covers exactly one. |
+| **Sprint state** (`SprintState`) | future, active, closed. Only an active sprint's tickets are worked. |
+
+### Contexts
+
+| Context | Aggregates and entities | Value objects and events | Domain services (pure rules) |
+|---|---|---|---|
+| **board** (core) | `Ticket` (aggregate root: stage, flags, order, Jira status, history) | `TicketEvent`; domain events `TicketMoved`, `TicketFlagged`, `FlagCleared`, `TicketCommented`, `ApprovalRecorded`, `PerfCheckRequested`, `TicketReordered`, `TicketBlocked`, `SentToJira`; `Flag` | who may move a ticket (`moves`), Jira status to stage mapping (`stages`), the sync payload's shape (`payload`), questions about history (`events`) |
+| **delivery** | | `Move`, `AdvanceFacts`, `TicketFacts`, `IdleFacts`, `PullRequestFacts`, `Verdict`, `Owner` | pipeline decisions (`pipeline`), routing, the merge gate and the merge bot's verdict (`merge_gate`), pickup, deploys and publishing, roles and limits (`roles`), CI check summaries |
+| **execution** | `AgentRunRecord` (one run of one role on a ticket) | `AgentResult`, `AgentRunRequest`, `RunResult`, `UsageRecord`, model request and response | reading a ticket's runs: whose turn, when to stop (`run_history`); the brief, system prompt, and gateway environment (`agent_run`); the gateway's rules (`gateway_rules`) |
+| **tracker** | | `StatusChange`, `Observation`, `OutboxDecision`, `OutboxStatus` | parsing a changelog and deciding when to poll (`changelog`); what to do with each queued Jira move (`outbox_rules`); webhook tokens |
+| **workspace** | `Config` (repos, boards, model, agents, bots) | `RepoLink`, `BoardLink`, `ModelConfig`, `AgentsConfig`, `BotsConfig` | validation of what may be linked |
+
+### Domain events
+
+A `Ticket` records a typed event for every change it accepts and hands them over with `pull_events()`. The repository
+writes each event's history line (`event.record()`) and returns the events. `TicketCommands` publishes them on an
+in-process `EventBus` inside the same unit of work, so a handler's writes commit or roll back with the change that
+caused them. Subscriptions are wired in `bootstrap.build_event_bus()`. Today: a `TicketMoved` queues the matching
+move in Jira (`application/tracker/handlers.py`).
+
+### Context map
+
+```
+ shared kernel  <──  board  (core)
+       ▲               ▲
+       │               │ use cases combine them; the domains do not import each other
+       ├──────  delivery, execution, tracker, workspace
+```
+
+Contexts meet in the application layer: a use case reads one context's facts and applies another's rules. For example
+`PipelineService` reads a ticket's history (board) and its runs (execution), and asks `delivery.pipeline` what to do.
 
 ## Facts in, decision out
 
@@ -84,16 +118,47 @@ connection and yields a `Session` with the use cases built over it: `session.tic
 
 Long actions run on a worker thread, so each one opens its own session (see `Container.background_work`).
 
+## Views: MVVM
+
+The web UI follows Model-View-ViewModel.
+
+- **Model:** the application (use cases) and the domain.
+- **View:** a Jinja template in `entrypoints/web/templates`. It reads only its view model and has no logic beyond
+  presentation. No HTML is built in Python.
+- **ViewModel:** a class in `entrypoints/web/viewmodels`, one per screen. It asks the container's use cases for what the
+  screen shows (`load`), shapes it for display, and offers the actions a person can take (`send_back`, `answer`,
+  `PipelineCommands.merge`, ...). A template is bound to its view model: each public field is a name in the template,
+  and `vm` is the view model itself.
+- **Routes** (`app.py`, `board_views.py`, `agents_views.py`) only create a view model and render it, or call a command.
+  They never open a board session or read settings; `test_architecture.py` checks that.
+
+| Screen | View model |
+|---|---|
+| Pipeline page and its fragments | `PipelineViewModel`, `PipelineBoardViewModel`, `ColumnViewModel`, `CardViewModel`, `ActivityViewModel`, `TicketLiveViewModel`, `PipelineCommands` |
+| Ticket page | `TicketViewModel` |
+| PR card | `PrCardViewModel` |
+| Board, backlog, item, outbox, deploy panel | `BoardViewModel`, `BacklogViewModel`, `ItemViewModel`, `OutboxViewModel`, `DeployPanelViewModel` |
+| Links and runs | `LinksViewModel`, `LinksPanelViewModel`, `CheckViewModel`, `RunsViewModel`, `RunViewModel`, `RunStatusViewModel` |
+
+The live stream (`/events`) renders fragments from the same view models, so the page and the stream cannot disagree.
+
 ## Testing
 
+Tests are organized by layer (`tests/domain`, `application`, `adapters`, `entrypoints`, `integration`, `contract`):
+
 - **Domain:** plain unit tests with no fixtures.
-- **Application:** in-memory fakes of the ports (`tests/fakes.py`).
-- **Adapters:** contract tests (`tests/contract/`) run each port against the SQLite adapter and the in-memory fake, so
-  the fakes stay faithful. `tests/test_ports_conformance.py` checks every adapter and fake has each method of its
-  port, with the same parameter names.
-- **Entrypoints:** FastAPI's `TestClient` and the CLI's `main` over a real temporary database.
-- `tests/support/` holds connection-based helpers (`board.move_stage(conn, ...)`, `agents.tick(conn, ...)`) that the
-  older integration tests use. They build the same use cases the container does.
+- **Application:** use cases with in-memory fakes of the ports (`tests/fakes.py`), or over SQLite through the fixtures in
+  `tests/conftest.py` (`tickets`, `queries`, `board_sync`, `outbox_service`, `session`).
+- **Adapters:** each adapter against the real thing (SQLite, git). `tests/contract` runs each port against the SQLite
+  adapter and the in-memory fake, so the fakes stay faithful, and `tests/adapters/test_ports_conformance.py` checks every
+  adapter and fake has each method of its port. `BoardQueries` and `BoardSync` are SQLite-only read and bulk-import
+  models, so they are tested through the adapter and have no in-memory fake.
+- **Entrypoints:** FastAPI's `TestClient`, the CLI's `main`, and the gateway, over a real temporary database. View models
+  are tested directly (`tests/entrypoints/test_viewmodels.py`).
+- **Integration:** `tests/integration` runs the pipeline over real SQLite and git, with the outside world faked.
+- **Seams:** the container takes `Overrides` (agent runner, forge, pull requests, tracker, git runner), so a test gives
+  fakes for what reaches outside the machine and uses everything else as it is. `tests/builders.py` has the test data
+  (Jira payloads, git repos, a container for a test).
 
 ## Adding things
 
@@ -109,7 +174,5 @@ Long actions run on a worker thread, so each one opens its own session (see `Con
 - Subpackages by layer (`domain/`, `application/`, ...) so the import rules can be checked mechanically.
 - LangGraph stays, behind `WorkflowEngine`, compiled with its checkpointer from the board's database. It is used only
   by `wf run` and the Runs pages.
-- Domain events are not used yet. A ticket's history is an append-only list of `TicketEvent`s, and the pipeline's
-  questions (approvals, perf requests, "changed since") are pure functions over it. Publishing those events to
-  subscribers is the next step if the history, the outbox, and the live stream should react to the same change.
+- Domain events are published in process, inside the unit of work (see above). There is no broker: nothing here needs one.
 - The SQLite schema did not change. Existing `wf.sqlite` files keep working.

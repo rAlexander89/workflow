@@ -178,3 +178,23 @@ def test_the_shared_kernel_imports_nothing_from_a_context():
 def test_every_domain_package_is_a_known_context():
     packages = {p.name for p in (SRC / "domain").iterdir() if p.is_dir() and p.name != "__pycache__"}
     assert packages == set(CONTEXTS) | {"shared"}
+
+
+# --- MVVM ---------------------------------------------------------------------------------------
+
+def test_web_routes_hold_no_logic_a_view_model_or_command_owns():
+    """A route creates a view model, or calls a command, and renders. It does not open a board session or call a
+    use case: that is what a view model is for."""
+    routes = [SRC / "entrypoints/web/app.py", SRC / "entrypoints/web/board_views.py",
+              SRC / "entrypoints/web/agents_views.py"]
+    for path in routes:
+        text = path.read_text()
+        assert ".session()" not in text, f"{path.name} opens a board session; move that into a view model"
+        assert "container.settings()" not in text, f"{path.name} reads settings; move that into a view model"
+
+
+def test_templates_are_bound_to_view_models_not_built_in_python():
+    for path in (SRC / "entrypoints/web").rglob("*.py"):
+        text = path.read_text()
+        for marker in ("<div", "<span", "<li>", "<ul>", "<b "):
+            assert marker not in text, f"{path.name} builds HTML ({marker}); put it in a template"

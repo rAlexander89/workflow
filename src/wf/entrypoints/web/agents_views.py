@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import threading
 import time
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -18,15 +17,16 @@ from wf.bootstrap import Container
 from wf.domain.delivery import github_webhook
 from wf.domain.shared.ticket_key import TicketKey
 from wf.domain.tracker import jira_webhook
-from wf.entrypoints.web import activity
+from wf.entrypoints.web import activity, auto_loop
 from wf.entrypoints.web.rendering import redirect, render, render_to_string, templates  # noqa: F401
 from wf.entrypoints.web.viewmodels.pipeline import (
     ActivityViewModel, PipelineBoardViewModel, PipelineCommands, PipelineViewModel, TicketLiveViewModel, board_events,
 )
 from wf.entrypoints.web.viewmodels.pr_card import PrCardViewModel
 
-_wake = threading.Event()  # set by a relevant GitHub webhook: the auto loop checks now, not in 15s
-_jira_changed = threading.Event()  # set by a Jira webhook: the auto loop reads Jira again now
+signals = auto_loop.Signals()
+_wake = signals.wake  # set by a relevant GitHub webhook: the auto loop checks now, not in 15s
+_jira_changed = signals.jira_changed  # set by a Jira webhook: the auto loop reads Jira again now
 _log = activity.log
 _start = activity.start
 
@@ -203,19 +203,4 @@ def mount_agents(app: FastAPI, container: Container) -> None:
             _wake.set()
         return {"ok": True, "event": event}
 
-    def auto_loop():
-        """Start the next pass by itself when a ticket is ready, e.g. right after its flag clears."""
-        while True:
-            _wake.wait(15)  # a webhook wakes it early; otherwise it checks every 15 seconds
-            _wake.clear()
-            try:
-                settings = container.settings()
-                jira_changed = _jira_changed.is_set()
-                with container.session() as s:
-                    waiting = s.cycle(settings, activity.Activity()).run_once(jira_changed=jira_changed)
-                if jira_changed and not waiting:
-                    _jira_changed.clear()  # the sync started; otherwise it stays set for the next cycle
-            except Exception as e:  # never let the loop die
-                _log(f"auto pass check failed: {e}")
-
-    threading.Thread(target=auto_loop, daemon=True).start()
+    auto_loop.start(container, signals)
