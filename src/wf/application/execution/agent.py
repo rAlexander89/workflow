@@ -13,6 +13,7 @@ from wf.application.ports.persistence import AgentRunRepository
 from wf.domain.board.errors import BoardError
 from wf.domain.execution import agent_run
 from wf.domain.execution.agent_run import AgentResult, AgentRunRequest
+from wf.domain.execution.run_history import AgentRunRecord
 
 
 class AgentRunService:
@@ -60,6 +61,6 @@ class AgentRunService:
                 role=role, key=key, db_path=self._queries.database_path(), worktree=worktree, test_cmd=test_cmd,
                 app_cmd=app_cmd, app_url=app_url, bot_email=bot_email, credentials_path=cred_path,
                 regression_url=regression_url, on_dev=on_dev, runner_secret=runner_secret)))
-        self._runs.record(key, stage, role, int(self._clock()), result.exit_code, result.timed_out,
-                          str(result.output_path))
+        self._runs.record(AgentRunRecord(key, stage, role, int(self._clock()), result.exit_code, result.timed_out,
+                                         str(result.output_path)))
         return AgentResult(key, stage, role, result)

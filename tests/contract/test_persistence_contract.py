@@ -157,7 +157,7 @@ def test_product_rounds_and_exit_codes(agent_runs):
 
 # --- the ticket repository -----------------------------------------------------------------
 
-from tests.test_board import PROJECT, payload, sync, ticket  # noqa: E402
+from tests.builders import PROJECT, payload, sync, ticket  # noqa: E402
 from wf.adapters.persistence.sqlite.board import SqliteTicketRepository  # noqa: E402
 
 

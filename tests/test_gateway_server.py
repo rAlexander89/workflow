@@ -5,7 +5,7 @@ import pytest
 
 from tests.support import board
 from wf.entrypoints import gateway as gateway_server
-from tests.test_board import clock, payload, sync, ticket
+from tests.builders import clock, payload, sync, ticket
 
 
 def rpc(gw, method, params=None, mid=1):
@@ -135,7 +135,7 @@ def test_start_app_needs_a_configured_command(db, tmp_path):
 
 def test_pr_review_will_not_approve_a_branch_with_stray_commits(db, tmp_path):
     import subprocess as sp
-    from tests.test_agents import git, GIT_ENV
+    from tests.builders import git, GIT_ENV
     repo = tmp_path / "r"; repo.mkdir()
     git(["init", "-q", "-b", "main"], repo)
     (repo / "a.txt").write_text("1"); git(["add", "-A"], repo); git(["commit", "-q", "-m", "base"], repo)

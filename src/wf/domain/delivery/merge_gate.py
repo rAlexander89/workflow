@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from wf.domain.board.errors import BoardError
+from wf.domain.shared.errors import DomainError
 from wf.domain.delivery.roles import REQUIRED_APPROVALS, missing_approvals
 
 
-class MergeBlocked(BoardError):
+class MergeBlocked(DomainError):
     pass
 
 

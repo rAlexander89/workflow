@@ -23,15 +23,18 @@ import json
 from typing import Any, Callable
 
 from wf.application.ports.board import BoardUnitOfWork
+from wf.application.events import EventBus
 from wf.domain.board.errors import BoardError
-
-RETRYABLE = ("blocked", "conflict", "failed", "sending")
-
+from wf.domain.shared.roles import Actor
+from wf.domain.tracker import outbox_rules
+from wf.domain.tracker.outbox_rules import RETRYABLE  # noqa: F401
 
 class OutboxService:
-    def __init__(self, unit_of_work: Callable[[], BoardUnitOfWork], clock: Callable[[], float]):
+    def __init__(self, unit_of_work: Callable[[], BoardUnitOfWork], clock: Callable[[], float],
+                 events: EventBus | None = None):
         self._uow = unit_of_work
         self._clock = clock
+        self._events = events or EventBus()
 
     def pending(self) -> list[dict]:
         with self._uow() as uow:
@@ -64,42 +67,28 @@ class OutboxService:
         with self._uow() as uow:
             for item in uow.outbox.pending():
                 key = item["ticket_key"]
-                target_status = uow.mappings.status_for(item["project_key"], item["target_stage"])
-                if target_status is None:
-                    uow.outbox.update(item["id"], "blocked", now, "the stage has no mapped Jira status")
-                    count("blocked")
-                    continue
-
-                obs = observations.get(key)
-                if obs is None:
+                raw = observations.get(key)
+                decision = outbox_rules.decide(
+                    target_status=uow.mappings.status_for(item["project_key"], item["target_stage"]),
+                    observation=None if raw is None else outbox_rules.Observation(
+                        raw["status"], tuple(raw.get("transitions", []))),
+                    last_seen_status=item["jira_status"])
+                if decision is None:
                     result["need"].append(key)
                     continue
-                current = obs["status"]
-
-                if current == target_status:
-                    uow.outbox.update(item["id"], "skipped", now, f"already in {target_status!r}")
-                    uow.tickets.set_jira_status(key, current)
-                    count("skipped")
-                elif current != item["jira_status"]:
-                    uow.outbox.update(item["id"], "conflict", now,
-                                      f"Jira status is {current!r}, last seen {item['jira_status']!r}; not forced")
+                uow.outbox.update(item["id"], decision.status, now, decision.detail,
+                                  attempts_bump=decision.status == outbox_rules.OutboxStatus.SENDING)
+                if decision.synced_jira_status is not None:
+                    uow.tickets.set_jira_status(key, decision.synced_jira_status)
+                if decision.flag_reason is not None:
                     ticket = uow.tickets.get(key)
-                    if ticket.flag("needs-human", "outbox",
-                                   f"Jira changed to {current!r} since last sync; a move to {target_status!r} is waiting",
-                                   now):
-                        uow.tickets.save(ticket)
-                    count("conflict")
-                else:
-                    transition = next((t for t in obs.get("transitions", []) if t.get("to") == target_status), None)
-                    if transition is None:
-                        uow.outbox.update(item["id"], "blocked", now,
-                                          f"Jira has no transition from {current!r} to {target_status!r}")
-                        count("blocked")
-                    else:
-                        uow.outbox.update(item["id"], "sending", now, attempts_bump=True)
-                        result["send"].append({"id": item["id"], "key": key,
-                                               "transition_id": transition["id"], "to_status": target_status})
-                        count("sending")
+                    if ticket.flag("needs-human", Actor.OUTBOX, decision.flag_reason, now):
+                        self._events.publish(uow.tickets.save(ticket), uow)
+                if decision.status == outbox_rules.OutboxStatus.SENDING:
+                    result["send"].append({"id": item["id"], "key": key, "transition_id": decision.transition_id,
+                                           "to_status": uow.mappings.status_for(item["project_key"],
+                                                                                item["target_stage"])})
+                count(decision.status)
         return result
 
     def ack(self, results: list[dict]) -> dict:
@@ -118,7 +107,7 @@ class OutboxService:
                     uow.tickets.set_jira_status(row["ticket_key"], status_after)
                     ticket = uow.tickets.get(row["ticket_key"])
                     ticket.sent_to_jira(status_after, now)
-                    uow.tickets.save(ticket)
+                    self._events.publish(uow.tickets.save(ticket), uow)
                     counts["sent"] += 1
                 else:
                     uow.outbox.update(r["id"], "failed", now, str(r.get("error", "unknown error"))[:500])
@@ -130,7 +119,7 @@ class OutboxService:
             row = uow.outbox.get(item_id)
             if row is None:
                 raise BoardError(f"no outbox item {item_id}")
-            if row["status"] not in RETRYABLE:
+            if not outbox_rules.can_retry(row["status"]):
                 raise BoardError(
                     f"item {item_id} is {row['status']!r}; only {', '.join(RETRYABLE)} can be retried")
             uow.outbox.update(item_id, "pending", int(self._clock()), "retry requested")

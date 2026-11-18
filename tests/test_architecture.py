@@ -143,3 +143,38 @@ def test_only_entrypoints_may_import_the_composition_root():
 @pytest.mark.parametrize("layer", LAYERS)
 def test_each_layer_package_exists(layer):
     assert (SRC / layer / "__init__.py").exists()
+
+
+# --- bounded contexts ---------------------------------------------------------------------------
+
+CONTEXTS = ("board", "delivery", "execution", "tracker", "workspace")
+
+
+def _context_of(path: Path) -> str | None:
+    parts = path.relative_to(SRC).parts
+    return parts[1] if parts[0] == "domain" and parts[1] in CONTEXTS else None
+
+
+def test_domain_contexts_depend_only_on_the_shared_kernel():
+    """Each bounded context stands alone: it may import wf.domain.shared and itself, never another context."""
+    breaches = {}
+    for path in _modules():
+        ctx = _context_of(path)
+        if ctx is None:
+            continue
+        for name in _imports(ast.parse(path.read_text())):
+            if name.startswith("wf.domain.") and name.split(".")[2] not in (ctx, "shared"):
+                breaches.setdefault(str(path.relative_to(SRC)), []).append(name)
+    assert not breaches, breaches
+
+
+def test_the_shared_kernel_imports_nothing_from_a_context():
+    for path in _modules():
+        if path.relative_to(SRC).parts[:2] == ("domain", "shared"):
+            for name in _imports(ast.parse(path.read_text())):
+                assert not (name.startswith("wf.domain.") and name.split(".")[2] != "shared"), (path, name)
+
+
+def test_every_domain_package_is_a_known_context():
+    packages = {p.name for p in (SRC / "domain").iterdir() if p.is_dir() and p.name != "__pycache__"}
+    assert packages == set(CONTEXTS) | {"shared"}

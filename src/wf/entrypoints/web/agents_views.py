@@ -23,6 +23,7 @@ from wf.domain.board.errors import BoardError
 from wf.domain.delivery import github_webhook
 from wf.domain.delivery.branches import branch_for
 from wf.domain.delivery.roles import STAGE_ROLE
+from wf.domain.execution import run_history
 from wf.domain.shared.ticket_key import TicketKey
 from wf.domain.tracker import jira_webhook
 from wf.entrypoints.web import activity
@@ -55,7 +56,7 @@ def mount_agents(app: FastAPI, container: Container) -> None:
             paused_text = time.strftime("%H:%M", time.localtime(paused_at)) if paused_at else ""
             by_stage: dict[str, list[dict]] = {}
             for r in rows:
-                last_code = s.agent_runs.last_exit_code(r["key"])
+                last_code = run_history.last_exit_code(s.agent_runs.runs_for(r["key"]))
                 flags = r["flags"]
                 reason = s.tickets.last_note(r["key"], "flag")
                 by_stage.setdefault(r["stage"], []).append({
@@ -382,7 +383,7 @@ def mount_agents(app: FastAPI, container: Container) -> None:
             stat = workspace.diff_stat(key)
             pr = s.tickets.last_note(key, "pr")
             approvals = sorted(s.tickets.approvals_at(key, head))
-            tests = s.agent_runs.last_exit_code(key, "dev")
+            tests = run_history.last_exit_code(s.agent_runs.runs_for(key), "dev")
             bot = s.merge_bot(settings)
             return card(
                 empty="", key=key, branch=branch_for(key), head=head, pr=pr,

@@ -7,6 +7,7 @@ makes here: clearing a flag and retrying an outbox item. Agents never reach thes
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import time
 from pathlib import Path
@@ -15,6 +16,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from wf.application.board.status import board_status
 from wf.application.tracker.outbox import RETRYABLE
 from wf.bootstrap import Container
 from wf.domain.board import stages as mapping
@@ -47,14 +49,8 @@ def mount_board(app: FastAPI, container: Container) -> None:
         return templates.TemplateResponse(request, name, {"active": active, **ctx})
 
     def sync_line(s, kind: str | None = None) -> dict:
-        last = s.queries.last_sync(kind)
-        counts = s.queries.counts()
-        now = time.time()
-        status = {"last_sync": last,
-                  "age_seconds": None if last is None or last["finished_at"] is None else int(now) - last["finished_at"],
-                  **counts}
-        run = last
-        age = None if run is None or run["finished_at"] is None else int(now) - run["finished_at"]
+        status = board_status(s.queries, time.time(), kind)
+        run, age = status["last_sync"], status["age_seconds"]
         return {
             "status": status,
             "run": dict(run) if run else None,
@@ -131,7 +127,7 @@ def mount_board(app: FastAPI, container: Container) -> None:
             if detail is None:
                 return HTMLResponse("No such ticket.", status_code=404)
             items = s.outbox.for_ticket(key)
-            runs = s.agent_runs.runs_for(key)
+            runs = [dataclasses.asdict(r) for r in s.agent_runs.runs_for(key)]
             for r in runs:
                 r["when"] = when(r["started_at"])
             events = [dict(e) for e in reversed(detail["events"])]

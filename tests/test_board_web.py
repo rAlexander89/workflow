@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from tests.support import board
 from tests.support import outbox
 from wf.entrypoints.web.app import create_app
-from tests.test_board import clock
+from tests.builders import clock
 
 STATUSES = [
     {"name": "Backlog", "category": "new"},

@@ -11,6 +11,7 @@ from wf.application.ports.board import BoardQueries
 from wf.application.ports.delivery import DeployObserver, Workspace
 from wf.application.ports.persistence import AgentRunRepository, PauseState
 from wf.domain.delivery import pipeline as rules
+from wf.domain.execution import run_history
 from wf.domain.delivery.roles import PAUSABLE, REFINEMENT_STAGES, STAGE_ROLE, next_refinement_role, unmet_blockers
 
 HARNESS = "harness"
@@ -91,15 +92,15 @@ class PipelineService:
         return rules.TicketFacts(
             refinement_role=self.refinement_role(key) if in_refinement else None,
             finished_and_unchanged=False if in_refinement else self._finished_and_unchanged(key, stage),
-            product_rounds=self._runs.product_rounds(key) if in_refinement else 0,
-            failed_in_a_row=0 if in_refinement else self._runs.failed_in_a_row(key, stage),
+            product_rounds=run_history.product_rounds(self._runs.runs_for(key)) if in_refinement else 0,
+            failed_in_a_row=0 if in_refinement else run_history.failed_in_a_row(self._runs.runs_for(key), stage),
             unmet_blockers=tuple(unmet_blockers(self._commands.blockers(key), stage_of))
             if stage == "ready_for_dev" else (),
         )
 
     def refinement_role(self, key: str) -> str:
         """Whose turn it is in refinement: product goes first, then staff, and so on."""
-        return next_refinement_role(self._runs.last_role_at(key, "in_refinement"))
+        return next_refinement_role(run_history.last_role_at(self._runs.runs_for(key), "in_refinement"))
 
     def _finished_and_unchanged(self, key: str, stage: str) -> bool:
         """True when the last run in this stage succeeded and nothing has happened to the ticket since.
@@ -107,10 +108,10 @@ class PipelineService:
         An event by anyone other than that run's own role counts as a change, so a review that sends the
         ticket back to this stage makes the stage run again.
         """
-        last = self._runs.last_run(key, stage)
-        if last is None or last["timed_out"] or last["exit_code"] != 0:
+        last = run_history.last_run(self._runs.runs_for(key), stage)
+        if last is None or last.failed:
             return False
-        return not self._commands.changed_since(key, last["started_at"], last["role"])
+        return not self._commands.changed_since(key, last.started_at, last.role)
 
     # --- why a ticket is not moving ---------------------------------------------------------
 
@@ -125,8 +126,8 @@ class PipelineService:
         return rules.idle_reason(rules.IdleFacts(
             stage=stage, flags=tuple(row["flags"]), sprint_state=row["sprint_state"],
             paused=self._pause.is_paused(), role=role,
-            product_rounds=self._runs.product_rounds(key) if in_refinement else 0,
-            failed_in_a_row=0 if in_refinement else self._runs.failed_in_a_row(key, stage),
+            product_rounds=run_history.product_rounds(self._runs.runs_for(key)) if in_refinement else 0,
+            failed_in_a_row=0 if in_refinement else run_history.failed_in_a_row(self._runs.runs_for(key), stage),
             unmet_blockers=tuple(unmet_blockers(self._commands.blockers(key), self._queries.stage_by_key()))
             if stage == "ready_for_dev" else (),
             finished_and_unchanged=False if in_refinement else self._finished_and_unchanged(key, stage),

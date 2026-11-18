@@ -3,8 +3,8 @@ import subprocess
 
 import pytest
 
-from tests.test_agents import GIT_ENV
-from tests.test_board import PROJECT, payload, sync, ticket
+from tests.builders import GIT_ENV
+from tests.builders import PROJECT, payload, sync, ticket
 from wf.adapters.config import workspace as cfgmod
 from wf.application.settings import Settings
 from wf.bootstrap import Container

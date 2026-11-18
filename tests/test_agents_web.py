@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from tests.support import board
 from wf.adapters.config import workspace as cfgmod
 from wf.entrypoints.web.app import create_app
-from tests.test_board import clock, payload, sync, ticket
+from tests.builders import clock, payload, sync, ticket
 
 
 @pytest.fixture

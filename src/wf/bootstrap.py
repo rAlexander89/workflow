@@ -13,6 +13,7 @@ import sqlite3
 import sys
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator
 
@@ -56,8 +57,10 @@ from wf.application.harness.deploy import DeployService
 from wf.application.harness.jira import JiraService
 from wf.application.harness.passes import PassService
 from wf.application.harness.run_ticket import RunTicketService
+from wf.application.ports.delivery import PullRequests
+from wf.application.ports.execution import AgentRunner
 from wf.application.ports.forge import Forge
-from wf.application.ports.harness import ActivityLog, TaskRunner
+from wf.application.ports.harness import ActivityLog, TaskRunner, Tracker
 from wf.application.ports.setup import AppEnvironment, BotAccounts, MachineChecks, RepoFinder
 from wf.application.settings import RepoSettings, Settings
 from wf.domain.board.errors import BoardError
@@ -86,6 +89,16 @@ def build_event_bus() -> EventBus:
     bus = EventBus()
     bus.subscribe(TicketMoved, on_ticket_moved)  # a move on the board queues the matching move in Jira
     return bus
+
+
+@dataclass
+class Overrides:
+    """Replacements for the adapters that reach outside the machine. Tests give fakes; production gives none."""
+    agent_runner: AgentRunner | None = None  # runs an agent
+    forge: Forge | None = None  # the forge a repo is hosted on, and every PR link's forge
+    pull_requests: PullRequests | None = None  # reads a pull request's state
+    tracker: Tracker | None = None  # Jira, through the user's session
+    git_runner: Callable | None = None  # runs git and gh commands: (argv, cwd) -> CompletedProcess
 
 
 class NullLog:
@@ -129,33 +142,46 @@ class Session:
         self.pause = SqlitePauseState(conn)
         self.agent_runs = SqliteAgentRuns(conn)
         self.sync = SqliteBoardSync(conn)
-        self.outbox = OutboxService(lambda: SqliteBoardUnitOfWork(conn), container.clock)
+        self.outbox = OutboxService(lambda: SqliteBoardUnitOfWork(conn), container.clock, container.events)
 
     # --- what depends on the linked repo -----------------------------------------------------------
 
     def workspace(self, s: Settings) -> GitWorkspace:
-        return GitWorkspace(s.repo_path(), runs_dir=s.runs_dir) if s.repos else _NoRepoWorkspace()
+        if not s.repos:
+            return _NoRepoWorkspace()
+        runner = self._c.overrides.git_runner
+        return GitWorkspace(s.repo_path(), runs_dir=s.runs_dir, **({"runner": runner} if runner else {}))
 
     _workspace = workspace
 
     def forge(self, s: Settings) -> Forge:
         """The forge the linked repo is hosted on: GitHub, or GitLab at its host (GitHub for a local repo)."""
+        if self._c.overrides.forge is not None:
+            return self._c.overrides.forge
+        runner = {"runner": self._c.overrides.git_runner} if self._c.overrides.git_runner else {}
         link = s.link()
         if link is not None and link.forge == "gitlab":
-            return forges.GitLab(host=link.host)
-        return forges.GitHub()
+            return forges.GitLab(host=link.host, **runner)
+        return forges.GitHub(**runner)
 
     def observer(self, s: Settings) -> DeployObserverService:
-        return DeployObserverService(commands=self.tickets, forge=self.forge(s), forge_for_url=forges.for_url)
+        return DeployObserverService(commands=self.tickets, forge=self.forge(s), forge_for_url=self.forge_for_url)
 
     def pipeline(self, s: Settings) -> PipelineService:
         return PipelineService(commands=self.tickets, queries=self.queries, pause=self.pause,
                                runs=self.agent_runs, workspace=self._workspace(s), deploys=self.observer(s))
 
+    def forge_for_url(self, url: str) -> Forge:
+        """A pull request link names its own forge."""
+        if self._c.overrides.forge is not None:
+            return self._c.overrides.forge
+        return forges.for_url(url, **({"runner": self._c.overrides.git_runner} if self._c.overrides.git_runner else {}))
+
     def agents(self, s: Settings) -> AgentRunService:
         return AgentRunService(
             commands=self.tickets, queries=self.queries, runs=self.agent_runs, workspace=self._workspace(s),
-            runner=ClaudeCodeRunner(gateway_command=GATEWAY_COMMAND, claude_bin=self._c.claude_bin()),
+            runner=self._c.overrides.agent_runner or ClaudeCodeRunner(gateway_command=GATEWAY_COMMAND,
+                                                                     claude_bin=self._c.claude_bin()),
             prompts=FilePromptLibrary(PROMPTS_DIR), runs_dir=s.runs_dir, clock=self._c.clock)
 
     def passes(self, s: Settings) -> PassService:
@@ -170,8 +196,7 @@ class Session:
         return MergeService(commands=self.tickets, workspace=self._workspace(s), tests=ShellTestRunner(s.runs_dir))
 
     def merge_bot(self, s: Settings) -> MergeBot:
-        return MergeBot(commands=self.tickets, workspace=self._workspace(s),
-                        pull_requests=_PullRequests(github_status.pr_status))
+        return MergeBot(commands=self.tickets, workspace=self._workspace(s), pull_requests=self.pull_requests)
 
     def publish(self, s: Settings) -> PublishService:
         link = s.link()
@@ -179,14 +204,14 @@ class Session:
                                hosted=not (link is not None and link.forge == "local"))
 
         def merge_pr(url: str) -> bool:
-            return forges.for_url(url).merge_pr(url)
+            return self.forge_for_url(url).merge_pr(url)
 
         return PublishService(commands=self.tickets, queries=self.queries, workspace=self._workspace(s),
                               target=target, bot=self.merge_bot(s), merge_pr=merge_pr)
 
     @property
-    def pull_requests(self) -> "_PullRequests":
-        return _PullRequests(github_status.pr_status)
+    def pull_requests(self) -> PullRequests:
+        return self._c.overrides.pull_requests or _PullRequests(github_status.pr_status)
 
     def deploy_graph(self, s: Settings) -> DeployGraphService:
         link = s.link()
@@ -197,7 +222,9 @@ class Session:
     def deploy(self, s: Settings) -> DeployService:
         return DeployService(commands=self.tickets, workspace=self._workspace(s), observer=self.observer(s))
 
-    def tracker(self, s: Settings) -> ClaudeSessionTracker:
+    def tracker(self, s: Settings) -> Tracker:
+        if self._c.overrides.tracker is not None:
+            return self._c.overrides.tracker
         return ClaudeSessionTracker(access=s.claude_code_access, workdir=s.runs_dir / "jira-session",
                                     model=s.model, claude_bin=self._c.claude_bin())
 
@@ -224,13 +251,14 @@ class _PullRequests:
 class Container:
     def __init__(self, db_path: Path, config_path: Path, *, clock: Callable[[], float] = time.time,
                  log: ActivityLog | None = None, runner_secret: str | None = None,
-                 claude_bin: Callable[[], str | None] | None = None):
+                 claude_bin: Callable[[], str | None] | None = None, overrides: "Overrides | None" = None):
         self.db_path = Path(db_path)
         self.config_path = Path(config_path)
         self.clock = clock
         self.log: ActivityLog = log or NullLog()
         self.runner_secret = os.environ.get("WF_RUNNER_SECRET", "") if runner_secret is None else runner_secret
         self.claude_bin = claude_bin or (lambda: shutil.which(claude_code.CLAUDE_BIN))
+        self.overrides = overrides or Overrides()
         self.events = build_event_bus()
         self.deploy_cache: dict = {}  # shared by every request: the deploy graph is cached briefly
 

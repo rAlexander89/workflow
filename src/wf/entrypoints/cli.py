@@ -14,6 +14,7 @@ import sys
 import time
 from pathlib import Path
 
+from wf.application.board.status import board_status
 from wf.application.settings import RepoSettings, Settings
 from wf.bootstrap import Container
 from wf.domain.board.errors import BoardError
@@ -346,9 +347,8 @@ def cmd_outbox(args) -> int:
 
 def cmd_status(args) -> int:
     with _container(args).session() as session:
-        run = session.queries.last_sync()
-        counts = session.queries.counts()
-    age = None if run is None or run["finished_at"] is None else int(time.time()) - run["finished_at"]
+        status = board_status(session.queries, time.time())
+    run, age, counts = status["last_sync"], status["age_seconds"], status
     if run is None:
         print("never synced: run the sync from your Claude session, then `wf sync`")
     else:

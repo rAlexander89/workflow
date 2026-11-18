@@ -10,6 +10,7 @@ from typing import Iterable, Protocol
 
 from wf.domain.delivery.routing import Decision
 from wf.domain.execution.run import Run
+from wf.domain.execution.run_history import AgentRunRecord
 from wf.domain.execution.usage import AgentAudit, UsageRecord
 from wf.domain.tracker.changelog import StatusChange
 
@@ -77,29 +78,10 @@ class PauseState(Protocol):
 
 
 class AgentRunRepository(Protocol):
-    """One record per agent run on a ticket, newest last."""
+    """The runs of each agent on each ticket. What the runs mean (whose turn, when to stop) is in the domain."""
 
-    def record(self, key: str, stage: str, role: str, started_at: int, exit_code: int | None,
-               timed_out: bool, output_path: str) -> None: ...
+    def record(self, run: AgentRunRecord) -> None: ...
 
-    def last_role_at(self, key: str, stage: str) -> str | None:
-        """The role of the most recent run at this stage, or None if none ran."""
-        ...
-
-    def last_run(self, key: str, stage: str) -> dict | None:
-        """The most recent run at this stage: role, exit_code, timed_out, started_at."""
-        ...
-
-    def failed_in_a_row(self, key: str, stage: str) -> int:
-        """Runs in a row, newest first, that exited non-zero or timed out. A success ends the count."""
-        ...
-
-    def product_rounds(self, key: str) -> int: ...
-
-    def runs_for(self, key: str) -> list[dict]:
+    def runs_for(self, key: str) -> list[AgentRunRecord]:
         """All runs on the ticket, newest first."""
-        ...
-
-    def last_exit_code(self, key: str, role: str | None = None) -> int | None:
-        """The exit code of the newest run (of this role, if given), or None if none ran."""
         ...

@@ -7,7 +7,7 @@ from tests.support import board
 from wf.adapters.tracker import jira_session as jira_session
 from tests.support import outbox
 from wf.domain.execution.model import ProviderNotAllowed
-from tests.test_board import clock, payload, sync, ticket
+from tests.builders import clock, payload, sync, ticket
 
 
 def fake(result_text, calls, returncode=0, is_error=False):

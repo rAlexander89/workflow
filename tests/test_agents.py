@@ -9,7 +9,7 @@ from tests.support import board
 from wf.adapters.runner import claude_code as claude_run
 from tests.support import github_agent
 from tests.support import merge
-from tests.test_board import PROJECT, clock, payload, sync, ticket, ticket_row
+from tests.builders import PROJECT, clock, payload, sync, ticket, ticket_row
 
 PROJECT_WITH_MERGED = {**PROJECT, "statuses": PROJECT["statuses"] + [{"name": "Merged to main", "category": "indeterminate"}]}
 
