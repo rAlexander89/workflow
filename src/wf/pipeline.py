@@ -11,11 +11,14 @@ import time
 from pathlib import Path
 from typing import Callable, Mapping
 
-from wf.events import ChangeStore, Intake, poll_due
-from wf.orchestrator import Decision, Dispatch, LifecycleStore, Supervisor, no_agents_wired
+from wf.application.tracker.triggers import TriggerPipeline
+from wf.events import ChangeStore, Intake, poll_due  # noqa: F401
+from wf.orchestrator import Decision, Dispatch, LifecycleStore, Supervisor, no_agents_wired  # noqa: F401
 
 
-class Pipeline:
+class Pipeline(TriggerPipeline):
+    """The trigger pipeline over the SQLite stores in one database file."""
+
     def __init__(
         self,
         db_path: Path,
@@ -25,27 +28,10 @@ class Pipeline:
         clock: Callable[[], float] = time.time,
         status_to_stage: Callable[[], Mapping[str, str]] | None = None,
     ):
-        self.changes = ChangeStore(Path(db_path), clock=clock)
-        self.intake = Intake(self.changes, fetch_changelog)
-        self.lifecycle = LifecycleStore(Path(db_path), clock=clock)
-        self.supervisor = Supervisor(self.lifecycle, dispatch, status_to_stage=status_to_stage)
-        self._search = search_keys
-        self._clock = clock
-
-    def _route(self, issue_key: str) -> list[Decision]:
-        changes, labels = self.intake.fetch(issue_key)
-        return [self.supervisor.handle(c, labels) for c in changes]
-
-    def on_webhook(self, issue_key: str) -> list[Decision]:
-        self.changes.mark_webhook()
-        return self._route(issue_key)
-
-    def poll(self, now: float | None = None) -> list[Decision]:
-        """Hourly fallback. Does nothing while webhooks are arriving."""
-        now = self._clock() if now is None else now
-        if not poll_due(self.changes.last_webhook_at(), now):
-            return []
-        decisions: list[Decision] = []
-        for key in self._search():
-            decisions.extend(self._route(key))
-        return decisions
+        changes = ChangeStore(Path(db_path), clock=clock)
+        lifecycle = LifecycleStore(Path(db_path), clock=clock)
+        super().__init__(
+            changes=changes, intake=Intake(changes, fetch_changelog),
+            supervisor=Supervisor(lifecycle, dispatch, status_to_stage=status_to_stage),
+            search_keys=search_keys, clock=clock)
+        self.lifecycle = lifecycle

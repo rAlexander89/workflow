@@ -15,19 +15,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Mapping
 
-from wf.events import StatusChange
-
 from wf.adapters.persistence.sqlite.lifecycle import SCHEMA, SqliteLifecycleLog as LifecycleStore  # noqa: F401
+from wf.application.tracker.supervisor import Dispatch, Supervisor as _Supervisor, no_agents_wired  # noqa: F401
 from wf.domain.delivery.routing import (  # noqa: F401
     HOTFIX_LABEL, MAX_DISPATCHES_PER_STATUS, STAGE_OWNERS, Decision, route,
 )
-
-Dispatch = Callable[[str, str, str], bool]  # (owner, issue_key, status) -> dispatched?
-
-
-def no_agents_wired(owner: str, issue_key: str, status: str) -> bool:
-    """Placeholder until the agents exist: nothing runs, nothing is dispatched."""
-    return False
+from wf.domain.tracker.changelog import StatusChange  # noqa: F401
 
 
 def board_status_to_stage(path: Path) -> dict[str, str]:
@@ -41,7 +34,9 @@ def board_status_to_stage(path: Path) -> dict[str, str]:
         conn.close()
 
 
-class Supervisor:
+class Supervisor(_Supervisor):
+    """The supervisor over a lifecycle store; the stage mapping defaults to the store's own database."""
+
     def __init__(
         self,
         store: LifecycleStore,
@@ -49,29 +44,5 @@ class Supervisor:
         max_dispatches_per_status: int = MAX_DISPATCHES_PER_STATUS,
         status_to_stage: Callable[[], Mapping[str, str]] | None = None,
     ):
-        self.store = store
-        self._dispatch = dispatch
-        self._max = max_dispatches_per_status
-        self._status_to_stage = status_to_stage or (lambda: board_status_to_stage(store.path))
-
-    def handle(self, change: StatusChange, labels: set[str] | frozenset[str] = frozenset()) -> Decision:
-        if self.store.killed():
-            decision = Decision("halt", None, "kill switch is on: nothing is dispatched")
-            self.store.record(change, decision, dispatched=False)
-            return decision
-
-        decision = route(change.to_status, labels, self._status_to_stage())
-
-        if decision.action in ("dispatch", "merge"):
-            if self.store.dispatch_count(change.issue_key, change.to_status) >= self._max:
-                decision = Decision(
-                    "escalate",
-                    None,
-                    f"{change.to_status!r} reached {self._max} times: needs a human",
-                )
-
-        dispatched = False
-        if decision.action in ("dispatch", "merge"):
-            dispatched = bool(self._dispatch(decision.owner, change.issue_key, change.to_status))
-        self.store.record(change, decision, dispatched=dispatched)
-        return decision
+        super().__init__(store, status_to_stage or (lambda: board_status_to_stage(store.path)), dispatch,
+                         max_dispatches_per_status)
