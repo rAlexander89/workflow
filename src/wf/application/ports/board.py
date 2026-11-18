@@ -105,6 +105,11 @@ class BoardUnitOfWork(Protocol):
 class BoardSync(Protocol):
     """Applies a validated sync payload from the Jira session to the board, in one transaction."""
 
+    def carry_workflow_statuses(self, data: dict) -> dict:
+        """Keep the project's workflow statuses from the last sync, which the payload cannot show when a
+        status has no tickets. Returns the payload."""
+        ...
+
     def apply(self, data: dict, clock: Callable[[], float]) -> SyncResult:
         """Raises BoardError, with nothing applied, if the payload is invalid or the sync fails."""
         ...

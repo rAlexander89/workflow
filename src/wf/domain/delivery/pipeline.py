@@ -71,6 +71,20 @@ def advance_move(f: AdvanceFacts) -> Move | None:
     return None
 
 
+def prod_ready(head: str | None, approved_since_regression: frozenset[str] | set[str], perf_requested: bool,
+               approved_since_performance: frozenset[str] | set[str]) -> bool:
+    """Regression passed on the current commit (and performance, if the dev asked for it).
+
+    Only then does the Deploy to prod button appear. Approvals count only after the ticket entered the stage
+    they belong to.
+    """
+    if head is None or "qa" not in approved_since_regression:
+        return False
+    if perf_requested:
+        return "performance" in approved_since_performance
+    return True
+
+
 # --- one pass of the loop ----------------------------------------------------------------------
 
 @dataclass(frozen=True)

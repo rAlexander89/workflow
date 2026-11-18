@@ -297,5 +297,8 @@ class SqliteBoardSync:
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
 
+    def carry_workflow_statuses(self, data: dict) -> dict:
+        return carry_workflow_statuses(self._conn, data)
+
     def apply(self, data: dict, clock: Callable[[], float]) -> SyncResult:
         return apply_payload(self._conn, data, clock)
