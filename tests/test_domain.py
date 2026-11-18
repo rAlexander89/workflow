@@ -69,3 +69,11 @@ def test_changelog_keeps_only_status_changes_and_the_poll_waits_two_hours():
     assert changelog.issue_key_from_webhook({"issue": {}}) is None
     assert changelog.poll_due(None, 100.0)
     assert not changelog.poll_due(0.0, 7199.0) and changelog.poll_due(0.0, 7200.0)
+
+
+def test_pickup_skip_reasons_in_priority_order():
+    from wf.domain.delivery.pickup import skip_reason
+    assert skip_reason("closed", ["blocked"], None) == "not in an active sprint"
+    assert skip_reason("active", ["blocked", "needs-human"], None) == "flagged: blocked, needs-human"
+    assert skip_reason("active", [], None) == "no Jira status is mapped to in_dev"
+    assert skip_reason("active", [], "In Dev") is None

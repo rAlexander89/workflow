@@ -113,6 +113,11 @@ class TicketCommands:
         with self._uow() as uow:
             return uow.tickets.get(key)
 
+    def status_for(self, project_key: str, stage: str) -> str | None:
+        """The project's Jira status mapped to this stage, or None."""
+        with self._uow() as uow:
+            return uow.mappings.status_for(project_key, stage)
+
     def record_note(self, key: str, actor: str, kind: str, detail: str, *, once: bool = False) -> None:
         """Write a note on the ticket's history (an observation, a PR link). With once=True, repeating the
         newest note of this kind adds nothing."""
