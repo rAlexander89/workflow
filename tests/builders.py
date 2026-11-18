@@ -68,7 +68,8 @@ def make_repo(path: Path) -> Path:
 
 def make_container(tmp_path: Path, *, repo: Path | None = None, overrides: Overrides | None = None,
                    test_cmd: str = "true", access: bool = True, remote: str = "acme/app", forge: str = "github",
-                   regression_url: str = "", app_url: str = "", **agents) -> Container:
+                   regression_url: str = "", app_url: str = "", bots_domain: str = "", bots_credentials: str = "",
+                   clock=clock, **agents) -> Container:
     """A container over a fresh database and a config that links `repo` (if given)."""
     cfg = cfgmod.Config()
     if repo is not None:
@@ -80,6 +81,8 @@ def make_container(tmp_path: Path, *, repo: Path | None = None, overrides: Overr
     for name, value in agents.items():
         setattr(cfg.agents, name, value)
     cfg.model = cfgmod.ModelConfig(claude_code_access=access)
+    if bots_domain:
+        cfg.bots = cfgmod.BotsConfig(enabled=True, domain=bots_domain, credentials_file=bots_credentials)
     config_path = tmp_path / "workflow.json"
     cfgmod.save(cfg, config_path)
     return Container(tmp_path / "wf.sqlite", config_path, clock=clock, runner_secret="",
@@ -127,3 +130,17 @@ class BoardOver:
 
 def board_over(db) -> BoardOver:
     return BoardOver(db)
+
+
+# --- seeding the board directly, for tests that start from a ticket already in some stage -------------
+
+def set_stage(conn, key, stage):
+    conn.execute("update ticket set stage = ? where key = ?", (stage, key))
+    conn.commit()
+
+
+def insert_ticket(conn, key, stage, sort_order=None):
+    conn.execute("insert into ticket (key, project_key, jira_id, summary, assignee_id, jira_status, labels, "
+                 "sprint_id, stage, flags, removed_at, synced_at, sort_order) values (?, 'ABC', ?, 'x', 'me', "
+                 "'Ready for dev', '[]', '101', ?, '[]', null, 0, ?)", (key, key, stage, sort_order))
+    conn.commit()

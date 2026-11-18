@@ -99,7 +99,7 @@ def test_a_run_briefs_the_role_scopes_the_gateway_and_is_recorded(parts):
     assert req.gateway_env["WF_APP_URL"] == "https://dev.test"  # regression runs against dev
     assert req.gateway_env["WF_RUNNER_SECRET_HOST"] == "dev.test"
     assert (result.stage, result.role, result.run.exit_code) == ("regression", "qa", 0)
-    assert runs.last_run("K-1", "regression")["role"] == "qa" and ws.synced == []  # only dev syncs
+    assert [(r.role, r.stage) for r in runs.runs_for("K-1")] == [("qa", "regression")] and ws.synced == []  # only dev syncs
 
 
 def test_a_dev_run_syncs_with_main_first_and_a_failed_sync_flags_the_ticket(parts):
@@ -107,7 +107,7 @@ def test_a_dev_run_syncs_with_main_first_and_a_failed_sync_flags_the_ticket(part
     svc._workspace = Workspace(sync_error="could not rebase")
     result = svc.run("dev", "K-1", access=True, model="m")
     assert result.run is None and runner.requests == []
-    assert state.tickets["K-1"].flags == ["blocked"] and runs.last_run("K-1", "regression") is None
+    assert state.tickets["K-1"].flags == ["blocked"] and runs.runs_for("K-1") == []
     svc._workspace = Workspace()
     assert svc.run("dev", "K-1", access=True, model="m").run is not None and svc._workspace.synced == ["K-1"]
 
