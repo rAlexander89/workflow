@@ -3,10 +3,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.support import board
-from tests.support import outbox
+from tests.builders import board_over
 from wf.entrypoints.web.app import create_app
-from tests.builders import clock
 
 STATUSES = [
     {"name": "Backlog", "category": "new"},
@@ -25,8 +23,8 @@ def ticket(key, status="Ready for dev", sprint_id="101", **extra):
 @pytest.fixture
 def setup(tmp_path):
     db = tmp_path / "wf.sqlite"
-    conn = board.connect(db)
-    board.apply_payload(conn, {
+    b = board_over(db)
+    b.apply({
         "kind": "active",
         "projects": [{"key": "ABC", "name": "Example", "statuses": STATUSES}],
         "sprints": [{"id": "101", "board_id": "7", "name": "Sprint 4", "state": "active"}],
@@ -34,12 +32,12 @@ def setup(tmp_path):
         "comments": [{"ticket_key": "ABC-1", "jira_comment_id": "c1", "author": "Ana",
                       "body": "Keep the old endpoint.", "created": 1}],
     })
-    board.apply_payload(conn, {
+    b.apply({
         "kind": "backlog",
         "tickets": [ticket("ABC-9", status="Backlog", sprint_id=None)],
     })
-    board.set_flag(conn, "ABC-1", "needs-human", actor="dev", reason="scope unclear")
-    conn.close()
+    b.tickets.set_flag("ABC-1", "needs-human", actor="dev", reason="scope unclear")
+    b.conn.close()
     app = create_app(config_path=tmp_path / "workflow.json", db_path=db)
     return TestClient(app, follow_redirects=False), db
 
@@ -83,19 +81,18 @@ def test_user_clears_a_flag_from_the_ticket_page(setup):
     client, db = setup
     r = client.post("/board/ticket/ABC-1/flag/clear", data={"flag": "needs-human"})
     assert r.status_code == 303 and r.headers["location"] == "/board/ticket/ABC-1"
-    conn = board.connect(db)
-    assert json.loads(board.ticket_detail(conn, "ABC-1")["ticket"]["flags"]) == []
-    conn.close()
+    with board_over(db) as b:
+        assert json.loads(b.queries.ticket_detail("ABC-1")["ticket"]["flags"]) == []
 
 
 def test_outbox_page_and_retry(setup):
     client, db = setup
-    conn = board.connect(db)
-    board.move_stage(conn, "ABC-1", "in_dev", actor="user", reason="start")
-    item = outbox.plan(conn, {"ABC-1": {"status": "Ready for dev",
+    b = board_over(db)
+    b.tickets.move_stage("ABC-1", "in_dev", actor="user", reason="start")
+    item = b.outbox.plan({"ABC-1": {"status": "Ready for dev",
                                         "transitions": [{"id": "31", "to": "Dev in progress"}]}})["send"][0]
-    outbox.ack(conn, [{"id": item["id"], "ok": False, "error": "HTTP 500"}])
-    conn.close()
+    b.outbox.ack([{"id": item["id"], "ok": False, "error": "HTTP 500"}])
+    b.conn.close()
 
     r = client.get("/board/outbox")
     assert r.status_code == 200 and "ABC-1" in r.text and "HTTP 500" in r.text
@@ -103,9 +100,8 @@ def test_outbox_page_and_retry(setup):
 
     r = client.post(f"/board/outbox/{item['id']}/retry")
     assert r.status_code == 303
-    conn = board.connect(db)
-    assert [o["status"] for o in outbox.listing(conn)] == ["pending"]
-    conn.close()
+    with board_over(db) as b:
+        assert [o["status"] for o in b.outbox.listing()] == ["pending"]
 
 
 def test_empty_board_says_never_synced(tmp_path):
@@ -116,13 +112,12 @@ def test_empty_board_says_never_synced(tmp_path):
 
 def test_answer_records_the_human_reply_and_clears_the_flag(setup):
     client, db = setup
-    c = board.connect(db)
-    board.set_flag(c, "ABC-1", "needs-human", "dev", "which endpoint?", clock=clock)
-    c.close()
+    with board_over(db) as b:
+        b.tickets.set_flag("ABC-1", "needs-human", "dev", "which endpoint?")
     r = client.post("/board/ticket/ABC-1/answer", data={"answer": "Use /login, redirect is handled there."},
                     follow_redirects=False)
     assert r.status_code == 303
-    c = board.connect(db)
+    c = board_over(db).conn
     body, origin = c.execute("select body, origin from ticket_comment where ticket_key='ABC-1' order by id desc limit 1").fetchone()
     assert body == "Use /login, redirect is handled there." and origin == "user"
     assert c.execute("select flags from ticket where key='ABC-1'").fetchone()[0] == "[]"
@@ -130,14 +125,13 @@ def test_answer_records_the_human_reply_and_clears_the_flag(setup):
 
 def test_send_back_moves_the_ticket_and_leaves_the_reason_for_the_agent(setup):
     client, db = setup
-    c = board.connect(db)
-    board.move_stage(c, "ABC-1", "in_dev", "user", "start", clock=clock)
-    board.move_stage(c, "ABC-1", "pr_open", "dev", "opened", clock=clock)
-    c.close()
+    with board_over(db) as b:
+        b.tickets.move_stage("ABC-1", "in_dev", "user", "start")
+        b.tickets.move_stage("ABC-1", "pr_open", "dev", "opened")
     r = client.post("/board/ticket/ABC-1/send-back", data={"to": "in_dev", "reason": "the redirect is lost"},
                     follow_redirects=False)
     assert r.status_code == 303
-    c = board.connect(db)
+    c = board_over(db).conn
     assert c.execute("select stage from ticket where key='ABC-1'").fetchone()[0] == "in_dev"
     body = c.execute("select body from ticket_comment where ticket_key='ABC-1' order by id desc limit 1").fetchone()[0]
     assert "the redirect is lost" in body

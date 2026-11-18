@@ -94,3 +94,25 @@ def test_a_flagged_ticket_is_never_advanced():
     assert advance_move(AdvanceFacts("regression", flagged=True, head="a" * 40,
                                      approved_since_regression=frozenset({"qa"}))) is None
     assert advance_move(AdvanceFacts("merged", flagged=True, dev_deployed=True)) is None
+
+
+def test_run_history_rules_read_a_tickets_runs_newest_first():
+    from wf.domain.execution import run_history as h
+    from wf.domain.execution.run_history import AgentRunRecord as R
+
+    def run(stage="in_dev", role="dev", at=1, code=0, timed_out=False):
+        return R("K-1", stage, role, at, code, timed_out, "out")
+
+    runs = [run(at=5, code=0), run(at=4, code=None, timed_out=True), run(at=3, code=1), run(at=2, code=0),
+            run(stage="qa", role="qa", at=1, code=7)]
+    assert h.failed_in_a_row(runs, "in_dev") == 0  # the newest run succeeded
+    assert h.failed_in_a_row(runs[1:], "in_dev") == 2  # a timeout and a failure, then a success ends the count
+    assert h.failed_in_a_row(runs, "qa") == 1 and h.failed_in_a_row(runs, "elsewhere") == 0
+    assert h.last_run(runs, "qa").exit_code == 7 and h.last_run(runs, "x") is None
+    assert h.last_role_at(runs, "in_dev") == "dev" and h.last_role_at(runs, "x") is None
+    assert h.last_exit_code(runs) == 0 and h.last_exit_code(runs, "qa") == 7 and h.last_exit_code(runs, "pm") is None
+    product = [run(stage="in_refinement", role="product"), run(stage="in_refinement", role="staff"),
+               run(stage="in_dev", role="product")]
+    assert h.product_rounds(product) == 2
+    assert h.last_exit_code([]) is None
+    assert R("K", "s", "r", 1, None, False, "o").failed and not R("K", "s", "r", 1, 0, False, "o").failed

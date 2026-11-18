@@ -94,3 +94,36 @@ def sync(conn, data):
 
 def ticket_row(conn, key):
     return conn.execute("select * from ticket where key = ?", (key,)).fetchone()
+
+
+class BoardOver:
+    """The board's use cases and queries over one connection to a database file, for tests that act on a
+    database an app under test is also using."""
+
+    def __init__(self, db):
+        from wf.adapters.persistence.sqlite.board import SqliteBoardUnitOfWork
+        from wf.adapters.persistence.sqlite.board_queries import SqliteBoardQueries
+        from wf.adapters.persistence.sqlite.board_sync import SqliteBoardSync
+        from wf.adapters.persistence.sqlite.schema import connect
+        from wf.application.board.tickets import TicketCommands
+        from wf.application.tracker.outbox import OutboxService
+        from wf.bootstrap import build_event_bus
+        self.conn = connect(db)
+        uow = lambda: SqliteBoardUnitOfWork(self.conn)  # noqa: E731
+        self.tickets = TicketCommands(uow, clock, build_event_bus())
+        self.outbox = OutboxService(uow, clock, build_event_bus())
+        self.queries = SqliteBoardQueries(self.conn)
+        self.sync = SqliteBoardSync(self.conn)
+
+    def apply(self, data):
+        return self.sync.apply(data, clock)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.conn.close()
+
+
+def board_over(db) -> BoardOver:
+    return BoardOver(db)

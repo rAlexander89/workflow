@@ -3,9 +3,8 @@ import json
 
 import pytest
 
-from tests.support import board
 from wf.entrypoints import gateway as gateway_server
-from tests.builders import clock, payload, sync, ticket
+from tests.builders import board_over, payload, sync, ticket
 
 
 def rpc(gw, method, params=None, mid=1):
@@ -15,9 +14,8 @@ def rpc(gw, method, params=None, mid=1):
 @pytest.fixture
 def db(tmp_path):
     p = tmp_path / "wf.sqlite"
-    c = board.connect(p)
-    sync(c, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
-    c.close()
+    with board_over(p) as b:
+        sync(b.conn, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
     return p
 
 
@@ -87,17 +85,16 @@ def test_serve_round_trip(db):
 def test_post_comment_records_on_the_ticket(db):
     res = call(gw(db), "post_comment", {"body": "looks good so far"})
     assert res["isError"] is False
-    conn = board.connect(db)
+    conn = board_over(db).conn
     assert conn.execute("select count(*) from ticket_comment where ticket_key='ABC-1'").fetchone()[0] == 1
 
 
 def test_request_changes_sends_ticket_back_to_dev(db):
-    conn = board.connect(db)
-    board.move_stage(conn, "ABC-1", "pr_open", "dev", "opened pr")
-    conn.close()
+    with board_over(db) as b:
+        b.tickets.move_stage("ABC-1", "pr_open", "dev", "opened pr")
     res = call(gw(db, role="pr_review"), "request_changes", {"reason": "missing test"})
     assert res["isError"] is False
-    conn = board.connect(db)
+    conn = board_over(db).conn
     assert conn.execute("select stage from ticket where key='ABC-1'").fetchone()[0] == "in_dev"
 
 

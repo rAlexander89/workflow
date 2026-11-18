@@ -1,18 +1,16 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.support import board
 from wf.adapters.config import workspace as cfgmod
 from wf.entrypoints.web.app import create_app
-from tests.builders import clock, payload, sync, ticket
+from tests.builders import board_over, payload, sync, ticket
 
 
 @pytest.fixture
 def client(tmp_path):
     db = tmp_path / "wf.sqlite"
-    c = board.connect(db)
-    sync(c, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
-    c.close()
+    with board_over(db) as b:
+        sync(b.conn, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
     cfg = tmp_path / "workflow.json"
     cfgmod.save(cfgmod.Config(), cfg)
     app = create_app(config_path=cfg, db_path=db, webhook_token="t")
@@ -118,10 +116,9 @@ def test_board_events_send_only_what_changed():
 
 def test_a_flagged_ticket_shows_its_flag_and_the_reason_on_the_page(tmp_path):
     db = tmp_path / "wf.sqlite"
-    c = board.connect(db)
-    sync(c, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
-    board.set_flag(c, "ABC-1", "needs-human", "qa", "the acceptance criteria are unclear")
-    c.close()
+    with board_over(db) as b:
+        sync(b.conn, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
+        b.tickets.set_flag("ABC-1", "needs-human", "qa", "the acceptance criteria are unclear")
     cfg = tmp_path / "workflow.json"
     cfgmod.save(cfgmod.Config(), cfg)
     page = TestClient(create_app(config_path=cfg, db_path=db, webhook_token="t")).get("/agents")

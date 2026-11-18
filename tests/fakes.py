@@ -126,45 +126,13 @@ class MemoryPauseState:
 
 class MemoryAgentRuns:
     def __init__(self):
-        self._rows: list[dict] = []
+        self._rows: list = []
 
-    def record(self, key, stage, role, started_at, exit_code, timed_out, output_path):
-        self._rows.append({"id": len(self._rows) + 1, "key": key, "stage": stage, "role": role,
-                           "started_at": started_at, "exit_code": exit_code, "timed_out": int(timed_out),
-                           "output_path": str(output_path)})
-
-    def _at(self, key, stage):
-        return [r for r in reversed(self._rows) if r["key"] == key and r["stage"] == stage]
-
-    def last_role_at(self, key, stage):
-        rows = self._at(key, stage)
-        return rows[0]["role"] if rows else None
-
-    def last_run(self, key, stage):
-        rows = self._at(key, stage)
-        if not rows:
-            return None
-        r = rows[0]
-        return {k: r[k] for k in ("role", "exit_code", "timed_out", "started_at")}
-
-    def failed_in_a_row(self, key, stage):
-        streak = 0
-        for r in self._at(key, stage):
-            if r["timed_out"] or r["exit_code"] != 0:
-                streak += 1
-            else:
-                break
-        return streak
-
-    def product_rounds(self, key):
-        return sum(1 for r in self._rows if r["key"] == key and r["role"] == "product")
+    def record(self, run):
+        self._rows.append(run)
 
     def runs_for(self, key):
-        return [dict(r) for r in reversed(self._rows) if r["key"] == key]
-
-    def last_exit_code(self, key, role=None):
-        rows = [r for r in reversed(self._rows) if r["key"] == key and (role is None or r["role"] == role)]
-        return rows[0]["exit_code"] if rows else None
+        return [r for r in reversed(self._rows) if r.key == key]
 
 
 import copy  # noqa: E402

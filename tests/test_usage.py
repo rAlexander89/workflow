@@ -1,6 +1,8 @@
 import pytest
 
-from tests.support.usage import UsageLedger, UsageRecord, format_audit
+from wf.adapters.persistence.sqlite.usage import SqliteUsageLog as UsageLedger
+from wf.domain.execution.usage import UsageRecord
+from wf.entrypoints.cli import format_audit
 
 
 def test_empty_ledger_says_so(tmp_path):

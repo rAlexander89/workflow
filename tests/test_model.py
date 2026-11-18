@@ -8,7 +8,7 @@ from wf.domain.execution.model import Message, ModelError, ModelRequest, Provide
 from wf.adapters.model.anthropic_api import API_URL, AnthropicAPIModel
 from wf.adapters.model.ollama import OllamaModel
 from wf.adapters.model.recording import record_call
-from tests.support.usage import UsageLedger
+from wf.adapters.persistence.sqlite.usage import SqliteUsageLog as UsageLedger
 
 REQ = ModelRequest(system="be brief", messages=(Message("user", "hi"),), max_tokens=64)
 
@@ -143,7 +143,6 @@ def test_cli_ask_routes_through_engine_and_records(tmp_path, monkeypatch, capsys
     assert out.strip() == "pong"
     assert "sk-test-xyz" not in out + err  # the key never reaches the terminal
     assert calls[0][2]["model"] == "claude-haiku-5-5"
-    from tests.support.usage import UsageLedger
     assert UsageLedger(db).largest_calls(1)[0]["ticket"] == "ABC-9"
 
 
