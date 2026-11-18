@@ -75,6 +75,37 @@ and the Jira outbox.
 `wf sync` takes the JSON payload that the Claude session builds from the Atlassian MCP.
 See `docs/sync-format.md`.
 
+## How it is built, and how to extend it
+
+`wf` is built with four patterns, chosen so that you can change or add a part without touching the rest:
+
+- **Hexagonal architecture (ports and adapters).** The core knows nothing about SQLite, git, GitHub, Jira, or Claude.
+  It talks to the outside through *ports* (small `typing.Protocol`s in `src/wf/application/ports`), and each outside
+  system is an *adapter* that implements one (`src/wf/adapters`). The CLI, the web app, and the agent gateway are
+  *entrypoints* that call the core (`src/wf/entrypoints`).
+- **Domain-driven design.** The domain is split into bounded contexts (board, delivery, execution, tracker, workspace)
+  that share a small vocabulary (`Stage`, `Role`, `Actor`, `TicketKey`). Rules are pure functions and aggregates in
+  `src/wf/domain`, with no I/O. A `Ticket` records typed domain events for every change.
+- **Inversion of control.** The core never creates an adapter. Frameworks (FastAPI, the CLI parser, the MCP loop) call
+  into use cases, and use cases call the ports they were given.
+- **Dependency injection.** Use cases take their ports as constructor arguments. One module, `src/wf/bootstrap.py`,
+  decides which adapter fills each port. There is no DI library; the wiring is plain code.
+
+Dependencies point inward: `entrypoints` and `adapters` depend on `application`, which depends on `domain`.
+`tests/test_architecture.py` fails if an import breaks that, so the structure stays intact as the project grows.
+
+Where to start when you want to:
+
+| You want to | Do this |
+|---|---|
+| Change a rule (who may move a ticket, when a PR is good to merge) | Edit the pure function in the right `src/wf/domain/<context>/` package and its unit test. |
+| Add a behavior | Add a use case class in `src/wf/application/<context>/` that takes ports. Test it with the in-memory fakes in `tests/fakes.py`. |
+| Support another system (another tracker, forge, model, or database) | Add a port in `src/wf/application/ports/` if none fits, write an adapter in `src/wf/adapters/`, add a contract test in `tests/contract/`, and wire it in `bootstrap.py`. |
+| Add a screen | Add a view model in `src/wf/entrypoints/web/viewmodels/`, a template bound to it, and a route that renders it. |
+| Add a command | Add it to `src/wf/entrypoints/cli.py`; it asks the container for use cases. |
+
+Read `docs/architecture.md` for the layers, the domain model, the ports, and the testing approach.
+
 ## Configuration
 
 `workflow.json` holds identifiers only: linked repos and boards, and model settings.
