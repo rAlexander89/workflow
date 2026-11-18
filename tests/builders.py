@@ -38,6 +38,10 @@ def ticket(key, status="Ready for dev", sprint_id="101", **extra):
     return t
 
 
+def backlog_ticket(key, status="Backlog", **extra):
+    return ticket(key, status=status, sprint_id=None, **extra)
+
+
 def payload(kind="active", **parts):
     data = {"kind": kind, "projects": [PROJECT], "sprints": [sprint("101", "active")],
             "tickets": [], "comments": []}

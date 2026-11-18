@@ -96,7 +96,7 @@ def test_a_run_without_a_bot_account_cannot_log_in(api, creds):
 
 
 def system_prompt(role, bot_email="", credentials_path=""):
-    prompts = FilePromptLibrary(Path(__file__).resolve().parents[1] / "prompts")
+    prompts = FilePromptLibrary(Path(__file__).resolve().parents[2] / "prompts")
     return compose_system_prompt(prompts.role_prompt(role), bot_email, credentials_path)
 
 

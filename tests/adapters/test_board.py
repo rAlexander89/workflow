@@ -3,7 +3,9 @@ import sqlite3
 
 import pytest
 
-from tests.builders import NOW, PROJECT, STATUSES, clock, payload, sprint, sync, ticket, ticket_row  # noqa: F401
+from tests.builders import (  # noqa: F401
+    NOW, PROJECT, STATUSES, backlog_ticket, clock, payload, sprint, sync, ticket, ticket_row,
+)
 from wf.adapters.persistence.sqlite.schema import SCHEMA_VERSION, connect
 from wf.application.board.status import board_status
 from wf.domain.board.errors import BoardError
@@ -188,34 +190,7 @@ def test_ticket_detail_returns_comments_and_events(conn, queries):
     assert queries.ticket_detail("NOPE-1") is None
 
 
-def test_cli_sync_board_and_sprints(tmp_path, capsys):
-    db = str(tmp_path / "wf.sqlite")
-    f = tmp_path / "sync.json"
-    f.write_text(json.dumps(payload(tickets=[ticket("ABC-1")])))
-    assert cli.main(["sync", str(f), "--db", db]) == 0
-    assert "tickets_created=1" in capsys.readouterr().out
-
-    assert cli.main(["board", "--db", db]) == 0
-    out = capsys.readouterr().out
-    assert "ready_for_dev" in out and "ABC-1" in out
-
-    assert cli.main(["sprints", "--state", "active", "--db", db]) == 0
-    assert "Sprint 101" in capsys.readouterr().out
-
-
-def test_cli_sync_reports_a_bad_file(tmp_path, capsys):
-    db = str(tmp_path / "wf.sqlite")
-    f = tmp_path / "bad.json"
-    f.write_text("{not json")
-    assert cli.main(["sync", str(f), "--db", db]) == 2
-    assert "could not read" in capsys.readouterr().err
-
-
 # --- backlog ------------------------------------------------------------------------
-
-def backlog_ticket(key, status="Backlog", **extra):
-    return ticket(key, status=status, sprint_id=None, **extra)
-
 
 def test_backlog_sync_stores_tickets_in_no_sprint(conn, queries):
     r = sync(conn, payload(kind="backlog", tickets=[backlog_ticket("ABC-5")]))
@@ -261,17 +236,6 @@ def test_active_ticket_dropped_to_backlog_leaves_the_active_board(conn, queries)
     sync(conn, payload(kind="backlog", tickets=[backlog_ticket("ABC-8")]))
     assert queries.active_board() == []
     assert [row["key"] for row in queries.backlog()] == ["ABC-8"]
-
-
-def test_cli_backlog_lists_tickets(tmp_path, capsys):
-    db = str(tmp_path / "wf.sqlite")
-    f = tmp_path / "backlog.json"
-    f.write_text(json.dumps(payload(kind="backlog", tickets=[backlog_ticket("ABC-5")])))
-    assert cli.main(["sync", str(f), "--db", db]) == 0
-    capsys.readouterr()
-    assert cli.main(["backlog", "--db", db]) == 0
-    out = capsys.readouterr().out
-    assert "ABC-5" in out and "ready_for_dev" not in out
 
 
 # --- harness moves, flags, and status ---------------------------------------------
@@ -326,30 +290,6 @@ def test_status_reports_age_and_blocked_stages(conn, queries):
     s = board_status(queries, NOW + 3600)
     assert s["age_seconds"] == 3600 and s["active_tickets"] == 1
     assert any(u["stage"] == "regression" for u in s["unmapped_stages"])
-
-
-def test_cli_status_flags_a_stale_board(tmp_path, capsys):
-    db = str(tmp_path / "wf.sqlite")
-    f = tmp_path / "sync.json"
-    f.write_text(json.dumps(payload(tickets=[ticket("ABC-1")])))
-    cli.main(["sync", str(f), "--db", db])
-    capsys.readouterr()
-    cli.main(["status", "--db", db])  # real clock: the sync just happened
-    assert "stale" not in capsys.readouterr().out
-
-
-def test_cli_move_and_flag(tmp_path, capsys):
-    db = str(tmp_path / "wf.sqlite")
-    f = tmp_path / "sync.json"
-    f.write_text(json.dumps(payload(tickets=[ticket("ABC-1", status="Ready for dev")])))
-    cli.main(["sync", str(f), "--db", db])
-    capsys.readouterr()
-    assert cli.main(["move", "ABC-1", "pr_open", "--actor", "dev", "--reason", "opened PR", "--db", db]) == 0
-    assert cli.main(["move", "ABC-1", "regression", "--actor", "qa", "--reason", "x", "--db", db]) == 2
-    assert cli.main(["flag", "ABC-1", "needs-human", "--actor", "dev", "--reason", "unclear", "--db", db]) == 0
-    assert cli.main(["flag", "ABC-1", "needs-human", "--actor", "dev", "--clear", "--db", db]) == 2
-    assert cli.main(["flag", "ABC-1", "needs-human", "--actor", "user", "--clear", "--db", db]) == 0
-    assert "error" in capsys.readouterr().err
 
 
 # --- who may move what --------------------------------------------------------------
