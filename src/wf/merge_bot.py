@@ -14,93 +14,31 @@ from __future__ import annotations
 
 import sqlite3
 import subprocess
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from wf import agents, board, github_status
+from wf import board, github_status
+from wf.adapters.workspace.git import GitWorkspace, run_git
+from wf.application.delivery.merge import MergeBot
+from wf.domain.delivery.merge_gate import Verdict  # noqa: F401
 
 Runner = Callable[[list[str], Path], "subprocess.CompletedProcess[str]"]
 
 
-@dataclass
-class Verdict:
-    ok: bool
-    reasons: list[str] = field(default_factory=list)  # why not, when ok is False
+class _Status:
+    """PullRequests over a status function, so callers can inject how a PR is read."""
 
-
-def _run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=False)
+    def __init__(self, status: Callable[[str], dict]):
+        self.status = status
 
 
 def stray_commits(key: str, repo: Path, runner: Runner | None = None) -> tuple[bool, list[str]]:
     """(ok, stray): ok when every commit the branch adds to GitHub's main carries the ticket key."""
-    run = runner or _run
-    fetched = run(["git", "fetch", "-q", "origin", "main"], repo)
-    if fetched.returncode != 0 and run(["git", "rev-parse", "--verify", "--quiet", "origin/main"], repo).returncode != 0:
-        return False, ["could not compare with GitHub's main: no origin/main to compare against"]
-    log = run(["git", "log", "--format=%s", f"origin/main..{agents.branch_for(key)}"], repo)
-    if log.returncode != 0:
-        return False, ["could not read the branch's commits"]
-    stray = [l for l in log.stdout.splitlines() if l.strip() and key not in l]
-    return (not stray), stray
+    return GitWorkspace(repo, runner=runner or run_git).stray_commits(key)
 
 
 def assess(conn: sqlite3.Connection, key: str, *, repo: Path, runner: Runner | None = None,
            status: Callable[[str], dict] | None = None) -> Verdict:
-    run = runner or _run
-    get = status or github_status.pr_status
-    reasons: list[str] = []
-
-    row = board.get_ticket(conn, key)
-    if row is None:
-        return Verdict(False, [f"no ticket {key}"])
-    if row.flags:
-        reasons.append("the ticket is flagged; a person has to clear it")
-
-    url = board.last_event_detail(conn, key, "pr")
-    if url is None:
-        return Verdict(False, reasons + ["there is no GitHub PR for this ticket yet"])
-
-    st = get(url)
-    if not st.get("ok"):
-        reasons.append(f"could not read the PR from GitHub: {st.get('error', '')}")
-    else:
-        if st.get("merged"):
-            reasons.append("the PR is already merged")
-        elif st.get("state") != "OPEN":
-            reasons.append(f"the PR is {st.get('state', 'not open').lower()}")
-        if st.get("checks") == "pending":
-            reasons.append("GitHub checks are still running")
-        elif st.get("checks") == "failed":
-            reasons.append("GitHub checks failed")
-        elif st.get("checks") == "none":
-            reasons.append("GitHub reports no checks on this PR")
-
-    # The PR itself is what gets merged, so its own commits and head are what must be checked.
-    if st.get("ok"):
-        stray_on_pr = [s for s in st.get("commit_subjects", []) if key not in s]
-        if stray_on_pr:
-            reasons.append(f"the PR itself carries {len(stray_on_pr)} commit(s) that are not {key}, "
-                           f"starting with: {stray_on_pr[0][:70]}")
-        head_proc = run(["git", "rev-parse", "--verify", "--quiet", agents.branch_for(key)], repo)
-        if head_proc.returncode == 0 and st.get("head") and head_proc.stdout.strip() != st["head"]:
-            reasons.append("the PR's head is not the branch's current commit; the PR needs updating first")
-
-    head_proc = run(["git", "rev-parse", "--verify", "--quiet", agents.branch_for(key)], repo)
-    if head_proc.returncode != 0:
-        reasons.append("the ticket's branch is missing")
-    else:
-        approvals = board.approvals_at(conn, key, head_proc.stdout.strip())
-        missing = {"pr_review", "perf_review", "qa"} - approvals
-        if missing:
-            reasons.append(f"not approved on the current commit by: {', '.join(sorted(missing))}")
-
-        ok, stray = stray_commits(key, repo, run)
-        if not ok and stray and stray[0].startswith("could not"):
-            reasons.append(stray[0])
-        elif not ok:
-            reasons.append(f"the PR would also add {len(stray)} commit(s) that are not {key}, "
-                           f"starting with: {stray[0][:70]}")
-
-    return Verdict(not reasons, reasons)
+    bot = MergeBot(commands=board._commands(conn), workspace=GitWorkspace(repo, runner=runner or run_git),
+                   pull_requests=_Status(status or github_status.pr_status))
+    return bot.assess(key)

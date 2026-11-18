@@ -9,6 +9,7 @@ from typing import Callable
 
 from wf.application.ports.board import BoardUnitOfWork
 from wf.domain.board import events
+from wf.domain.board.events import TicketEvent
 from wf.domain.board.errors import BoardError
 from wf.domain.board.ticket import (
     Ticket, check_approval, check_block, check_comment, check_flag, check_perf_request, check_stage,
@@ -106,6 +107,28 @@ class TicketCommands:
             ticket = self._load(uow, key, in_scope=True)
             ticket.set_order(position, actor, self._now())
             uow.tickets.save(ticket)
+
+    def get(self, key: str) -> Ticket | None:
+        """The ticket, including one removed from scope, or None if the key is unknown."""
+        with self._uow() as uow:
+            return uow.tickets.get(key)
+
+    def record_note(self, key: str, actor: str, kind: str, detail: str, *, once: bool = False) -> None:
+        """Write a note on the ticket's history (an observation, a PR link). With once=True, repeating the
+        newest note of this kind adds nothing."""
+        with self._uow() as uow:
+            if once and uow.tickets.last_event_detail(key, kind) == detail:
+                return
+            uow.tickets.append_event(TicketEvent(key, self._now(), actor, kind, None, None, detail))
+
+    def last_note(self, key: str, kind: str) -> str | None:
+        with self._uow() as uow:
+            return uow.tickets.last_event_detail(key, kind)
+
+    def notes(self, key: str, kind: str) -> list[str]:
+        """The notes of this kind, newest first."""
+        with self._uow() as uow:
+            return uow.tickets.event_details(key, kind)
 
     # --- questions about a ticket's history -------------------------------------------
 

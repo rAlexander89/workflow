@@ -58,8 +58,7 @@ def last_exit_code(conn: sqlite3.Connection, key: str, role: str | None = None) 
 
 # --- git ----------------------------------------------------------------------------
 
-def branch_for(key: str) -> str:
-    return f"agent/{key}"
+from wf.domain.delivery.branches import branch_for  # noqa: E402,F401
 
 
 def _git(args: list[str], cwd: Path) -> str:
