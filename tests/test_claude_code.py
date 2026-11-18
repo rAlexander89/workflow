@@ -5,7 +5,9 @@ import subprocess
 
 import pytest
 
-from wf import claude_run, cli
+from wf import claude_run
+
+from wf.entrypoints import cli
 from wf import config as cfgmod
 from wf.config import Config, ModelConfig
 from wf.model import Message, ModelError, ModelRequest, ProviderNotAllowed, build_model, known_providers

@@ -2,7 +2,8 @@ import subprocess
 
 import pytest
 
-from wf import cli, onboarding
+from wf import onboarding
+from wf.entrypoints import cli
 from wf import config as cfgmod
 
 
@@ -82,7 +83,8 @@ def test_init_rejects_a_pick_that_is_not_in_the_list(tmp_path, capsys, monkeypat
 
 
 def test_source_control_non_interactive_infers_the_forge():
-    from wf import cli, onboarding
+    from wf import onboarding
+    from wf.entrypoints import cli
     gh = onboarding.RepoCandidate(path="/x", name="a", remote="o/a", last_commit=0, my_commits=0,
                                   remote_url="git@github.com:o/a.git")
     gl = onboarding.RepoCandidate(path="/y", name="b", remote="g/b", last_commit=0, my_commits=0,
@@ -94,7 +96,8 @@ def test_source_control_non_interactive_infers_the_forge():
 
 
 def test_source_control_interactive_asks_the_four_options(monkeypatch):
-    from wf import cli, onboarding
+    from wf import onboarding
+    from wf.entrypoints import cli
     answers = iter(["2", "git.example.com", "g/b"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     c = onboarding.RepoCandidate(path="/y", name="b", remote="", last_commit=0, my_commits=0, remote_url="")

@@ -36,6 +36,7 @@ from wf.adapters.model.recording import record_call
 from wf.adapters.runner import claude_code
 from wf.adapters.runner.claude_code import ClaudeCodeRunner
 from wf.adapters.runner.prompts import FilePromptLibrary
+from wf.adapters.runner.toolbox import AppSettings, LocalAppSession, WorktreeToolbox
 from wf.adapters.tracker import integrations, jira_session
 from wf.adapters.system import preflight
 from wf.adapters.workflow.engine import LangGraphEngine
@@ -64,7 +65,7 @@ from wf.application.tracker.supervisor import Supervisor, no_agents_wired
 from wf.application.tracker.triggers import TriggerPipeline
 
 PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
-GATEWAY_COMMAND = [sys.executable, "-m", "wf.gateway_server"]
+GATEWAY_COMMAND = [sys.executable, "-m", "wf.entrypoints.gateway"]
 
 
 class _NoRepoWorkspace:
@@ -279,6 +280,14 @@ class Container:
 
     def record_model_call(self, agent: str, response, *, ticket: str | None = None, provider: str | None = None) -> None:
         record_call(self.usage_log(), agent, response, ticket=ticket, provider=provider)
+
+    @staticmethod
+    def run_toolbox(*, worktree, key: str, test_cmd: str = "") -> WorktreeToolbox:
+        return WorktreeToolbox(worktree=worktree, key=key, test_cmd=test_cmd)
+
+    @staticmethod
+    def app_session(**settings) -> LocalAppSession:
+        return LocalAppSession(AppSettings(**settings))
 
     @staticmethod
     def agent_runner(gateway_command: list[str], claude_bin: str | None) -> ClaudeCodeRunner:

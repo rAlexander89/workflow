@@ -2,7 +2,9 @@ import json
 
 import pytest
 
-from wf import board, cli, outbox
+from wf import board, outbox
+
+from wf.entrypoints import cli
 
 NOW = 1000.0
 

@@ -1,4 +1,4 @@
-from wf import cli
+from wf.entrypoints import cli
 
 
 def run(tmp_path, *args):

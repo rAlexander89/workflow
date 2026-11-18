@@ -124,7 +124,7 @@ def test_loop_guard_is_per_ticket(tmp_path):
 
 
 def test_cli_route_and_kill(tmp_path, capsys):
-    from wf import cli
+    from wf.entrypoints import cli
     from wf.board import connect, sync_file
     import json
 

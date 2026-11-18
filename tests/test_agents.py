@@ -209,7 +209,7 @@ def test_pr_review_approval_moves_the_ticket_to_qa(conn, repo, tmp_path):
     git(["update-ref", "refs/remotes/origin/main", "main"], repo)  # GitHub's main, as last fetched
     conn.execute("update ticket set stage = 'pr_open' where key = 'ABC-1'")
     conn.commit()
-    from wf import gateway_server
+    from wf.entrypoints import gateway as gateway_server
     g = gateway_server.Gateway(gateway_server.Scope({
         "WF_ROLE": "pr_review", "WF_KEY": "ABC-1", "WF_DB": str(conn.execute("pragma database_list").fetchone()[2]),
         "WF_WORKTREE": str(wt)}))
@@ -326,7 +326,7 @@ def test_code_performance_review_approval_moves_the_ticket_to_qa(conn, repo, tmp
     wt = _branch_with_change(repo, tmp_path)
     conn.execute("update ticket set stage = 'ready_for_perf_review' where key = 'ABC-1'")
     conn.commit()
-    from wf import gateway_server
+    from wf.entrypoints import gateway as gateway_server
     g = gateway_server.Gateway(gateway_server.Scope({
         "WF_ROLE": "perf_review", "WF_KEY": "ABC-1", "WF_DB": str(conn.execute("pragma database_list").fetchone()[2]),
         "WF_WORKTREE": str(wt)}))

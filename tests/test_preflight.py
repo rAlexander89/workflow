@@ -1,7 +1,9 @@
 import subprocess
 from pathlib import Path
 
-from wf import claude_run, cli, preflight
+from wf import claude_run, preflight
+
+from wf.entrypoints import cli
 from wf.model import claude_code
 from wf.model.claude_code import subscription_env
 

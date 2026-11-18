@@ -124,7 +124,7 @@ def test_config_never_stores_the_key_itself():
 
 
 def test_cli_ask_routes_through_engine_and_records(tmp_path, monkeypatch, capsys):
-    from wf import cli
+    from wf.entrypoints import cli
     from wf.model import anthropic_api
 
     cfg_path = tmp_path / "workflow.json"
@@ -154,7 +154,7 @@ def test_cli_ask_routes_through_engine_and_records(tmp_path, monkeypatch, capsys
 
 
 def test_cli_status_never_prints_the_key(tmp_path, monkeypatch, capsys):
-    from wf import cli
+    from wf.entrypoints import cli
 
     cfg_path = tmp_path / "workflow.json"
     cli.main(["--config", str(cfg_path), "model", "set", "--provider", "anthropic-api"])

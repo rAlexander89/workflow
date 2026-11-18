@@ -1,7 +1,7 @@
 """Agents: run the role that owns a ticket's stage, and loop over the board.
 
 Each run is one `claude -p` process in the ticket's branch worktree, connected to the
-gateway (wf.gateway_server) with its scope set in the environment. The role's prompt
+gateway (wf.entrypoints.gateway) with its scope set in the environment. The role's prompt
 from prompts/ is the system prompt. The ticket is the task.
 
 Every ticket has one branch, `agent/<KEY>`, cut from the internal main. All roles work on
@@ -117,7 +117,7 @@ def run_agent(
     service = AgentRunService(
         commands=board._commands(conn, clock), queries=SqliteBoardQueries(conn), runs=SqliteAgentRuns(conn),
         workspace=GitWorkspace(repo, worktrees=Path(runs_dir) / "worktrees"),
-        runner=ClaudeCodeRunner(gateway_command=[sys.executable, "-m", "wf.gateway_server"],
+        runner=ClaudeCodeRunner(gateway_command=[sys.executable, "-m", "wf.entrypoints.gateway"],
                                 claude_bin=claude_bin, runner=runner),
         prompts=FilePromptLibrary(PROMPTS_DIR), runs_dir=Path(runs_dir), clock=clock)
     return service.run(role, key, access=access, model=model, test_cmd=test_cmd, app_cmd=app_cmd, app_url=app_url,

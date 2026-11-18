@@ -3,7 +3,8 @@ import threading
 
 import pytest
 
-from wf import envs, gateway_server
+from wf import envs
+from wf.entrypoints import gateway as gateway_server
 
 
 @pytest.fixture

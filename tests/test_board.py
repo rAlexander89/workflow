@@ -3,7 +3,9 @@ import sqlite3
 
 import pytest
 
-from wf import board, cli
+from wf import board
+
+from wf.entrypoints import cli
 
 NOW = 1000.0
 

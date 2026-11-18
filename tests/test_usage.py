@@ -39,7 +39,7 @@ def test_negative_counts_rejected(tmp_path):
 
 
 def test_cli_usage_prints_audit(tmp_path, capsys):
-    from wf import cli
+    from wf.entrypoints import cli
 
     db = tmp_path / "wf.sqlite"
     UsageLedger(db).record(UsageRecord("product", "m", input_tokens=100, output_tokens=20))

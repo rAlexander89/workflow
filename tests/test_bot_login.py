@@ -5,7 +5,8 @@ import urllib.parse
 
 import pytest
 
-from wf import agents, gateway_server
+from wf import agents
+from wf.entrypoints import gateway as gateway_server
 
 PASSWORD = "Sup3r-secret!pw"
 
