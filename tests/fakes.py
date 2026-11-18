@@ -350,3 +350,7 @@ class MemoryBoardQueries:
 
     def stage_by_key(self):
         return {t.key: t.stage for t in self._live() if t.stage is not None}
+
+    def qa_approved_without_pr(self):
+        return [t.key for t in self._live() if t.stage == "qa_approved"
+                and not any(e.kind == "pr" for e in self._s.history.get(t.key, []))]

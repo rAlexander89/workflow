@@ -51,6 +51,16 @@ class GitWorkspace:
     def main_head(self) -> str:
         return self._git("rev-parse", "main")
 
+    def remote_url(self) -> str | None:
+        """The repo's origin URL, or None if it has none. Always asks git directly."""
+        proc = run_git(["git", "remote", "get-url", "origin"], self._repo)
+        return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else None
+
+    def push_branch(self, key: str) -> tuple[bool, str]:
+        """Push the ticket's branch to origin. (ok, the end of git's error when not ok)."""
+        proc = self._run(["git", "push", "-u", "origin", branch_for(key)], self._repo)
+        return proc.returncode == 0, proc.stderr.strip()[-300:]
+
     def stray_commits(self, key: str) -> tuple[bool, list[str]]:
         fetched = self._run(["git", "fetch", "-q", "origin", "main"], self._repo)
         if fetched.returncode != 0 and self._run(

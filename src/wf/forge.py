@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Callable
 from typing import Protocol
 
+from wf.application.ports.forge import Forge  # noqa: F401
 from wf.domain.delivery.checks import pairs_state as checks_state  # noqa: F401
 
 Runner = Callable[[list[str], Path], "subprocess.CompletedProcess[str]"]
@@ -23,18 +24,6 @@ Runner = Callable[[list[str], Path], "subprocess.CompletedProcess[str]"]
 
 def _run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=False)
-
-
-class Forge(Protocol):
-    name: str
-
-    def pr_status(self, url: str) -> dict: ...
-    def open_pr(self, repo: str, branch: str, title: str, body: str) -> str: ...
-    def merge_pr(self, url: str) -> bool: ...
-    def runs(self, repo: str, branch: str) -> list[dict]: ...
-    def jobs(self, repo: str, run_id: str) -> list[dict]: ...
-    def job_messages(self, repo: str, job_id: str) -> list[str]: ...
-    def dispatch_prod(self, repo: str, sha: str) -> bool: ...
 
 
 @dataclass

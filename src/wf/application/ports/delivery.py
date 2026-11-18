@@ -24,6 +24,14 @@ class Workspace(Protocol):
 
     def main_head(self) -> str: ...
 
+    def remote_url(self) -> str | None:
+        """The repo's origin URL, or None if it has none."""
+        ...
+
+    def push_branch(self, key: str) -> tuple[bool, str]:
+        """Push the ticket's branch to origin. (ok, the end of the error when not ok)."""
+        ...
+
     def stray_commits(self, key: str) -> tuple[bool, list[str]]:
         """(ok, stray): ok when every commit the branch adds to the remote main carries the ticket key."""
         ...
