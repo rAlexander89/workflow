@@ -5,7 +5,10 @@ import urllib.parse
 
 import pytest
 
-from tests.support import agents
+from pathlib import Path
+
+from wf.adapters.runner.prompts import FilePromptLibrary
+from wf.domain.execution.agent_run import compose_system_prompt
 from wf.entrypoints import gateway as gateway_server
 
 PASSWORD = "Sup3r-secret!pw"
@@ -92,9 +95,14 @@ def test_a_run_without_a_bot_account_cannot_log_in(api, creds):
         g.bot_login({})
 
 
+def system_prompt(role, bot_email="", credentials_path=""):
+    prompts = FilePromptLibrary(Path(__file__).resolve().parents[1] / "prompts")
+    return compose_system_prompt(prompts.role_prompt(role), bot_email, credentials_path)
+
+
 def test_system_prompt_names_the_account_and_file_but_never_the_password(tmp_path):
-    text = agents.system_prompt("qa", "qa@example.com", "/home/x/.config/example-bots/credentials.env")
+    text = system_prompt("qa", "qa@example.com", "/home/x/.config/example-bots/credentials.env")
     assert "qa@example.com" in text and "credentials.env" in text
     assert "bot_login" in text and PASSWORD not in text
     assert "##" in text  # the identity block is its own section
-    assert "qa@example.com" not in agents.system_prompt("qa")  # no block without a bot account
+    assert "qa@example.com" not in system_prompt("qa")  # no block without a bot account

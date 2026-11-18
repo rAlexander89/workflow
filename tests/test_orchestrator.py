@@ -1,7 +1,9 @@
 import pytest
 
-from tests.support.events import StatusChange
-from tests.support.orchestrator import LifecycleStore, Supervisor, route
+from wf.adapters.persistence.sqlite.lifecycle import SqliteLifecycleLog as LifecycleStore
+from wf.application.tracker.supervisor import Supervisor as _Supervisor, no_agents_wired
+from wf.domain.delivery.routing import route
+from wf.domain.tracker.changelog import StatusChange
 
 # Test data only. In a real run the mapping comes from the board, per team.
 MAPPING = {
@@ -18,6 +20,11 @@ MAPPING = {
     "Regression testing": "regression",
     "Deployed to prod": "deployed",
 }
+
+
+def Supervisor(store, dispatch=no_agents_wired, max_dispatches_per_status=10, status_to_stage=lambda: MAPPING):  # noqa: N802
+    """The supervisor over a lifecycle log, with this file's stage mapping unless a test gives its own."""
+    return _Supervisor(store, status_to_stage, dispatch, max_dispatches_per_status)
 
 
 def change(status, key="ENG-1", frm="x"):
@@ -125,7 +132,6 @@ def test_loop_guard_is_per_ticket(tmp_path):
 
 def test_cli_route_and_kill(tmp_path, capsys):
     from wf.entrypoints import cli
-    from tests.support.board import connect, sync_file
     import json
 
     db = tmp_path / "wf.sqlite"
@@ -137,9 +143,7 @@ def test_cli_route_and_kill(tmp_path, capsys):
             {"name": "Dev in progress", "category": "indeterminate"},
         ]}],
     }))
-    conn = connect(db)
-    sync_file(conn, payload)
-    conn.close()
+    assert cli.main(["sync", str(payload), "--db", str(db)]) == 0
 
     assert cli.main(["route", "Ready for dev", "--hotfix", "--db", str(db)]) == 0
     assert "oncall" in capsys.readouterr().out

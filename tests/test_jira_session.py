@@ -3,11 +3,9 @@ import subprocess
 
 import pytest
 
-from tests.support import board
-from wf.adapters.tracker import jira_session as jira_session
-from tests.support import outbox
+from tests.builders import payload, sync, ticket
+from wf.adapters.tracker import jira_session
 from wf.domain.execution.model import ProviderNotAllowed
-from tests.builders import clock, payload, sync, ticket
 
 
 def fake(result_text, calls, returncode=0, is_error=False):
@@ -37,7 +35,7 @@ def test_session_uses_the_user_mcp_and_only_jira_read_tools(tmp_path):
     assert "Bash" in argv[argv.index("--disallowedTools") + 1:]
 
 
-def test_sync_payload_is_applied_to_the_board(tmp_path):
+def test_sync_payload_is_applied_to_the_board(tmp_path, conn):
     body = {"kind": "active", "projects": [{"key": "ABC", "name": "Example", "statuses": [
         {"name": "Ready for dev", "category": "new", "source": "observed"}]}],
         "sprints": [{"id": "3", "board_id": "1", "name": "Sprint 3", "state": "active"}],
@@ -46,8 +44,7 @@ def test_sync_payload_is_applied_to_the_board(tmp_path):
         "comments": []}
     calls = []
     got = jira_session.fetch_sync_payload(workdir=tmp_path, runner=fake("```json\n" + json.dumps(body) + "\n```", calls), **KW)
-    c = board.connect(tmp_path / "wf.sqlite")
-    assert sync(c, got).counts.get("tickets_created") == 1
+    assert sync(conn, got).counts.get("tickets_created") == 1
 
 
 def test_sync_rejects_a_non_payload_answer(tmp_path):
@@ -60,14 +57,13 @@ def test_session_error_is_reported(tmp_path):
         jira_session.session("x", allowed=[], workdir=tmp_path, runner=fake("boom", [], is_error=True), **KW)
 
 
-def test_send_goes_through_the_outbox_and_writes_only_what_was_planned(tmp_path):
-    db = tmp_path / "wf.sqlite"
-    c = board.connect(db)
+def test_send_goes_through_the_outbox_and_writes_only_what_was_planned(tmp_path, conn, tickets, outbox_service):
+    c = conn
     sync(c, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
-    board.move_stage(c, "ABC-1", "in_dev", "user", "test", clock=clock)
+    tickets.move_stage("ABC-1", "in_dev", "user", "test")
     observed = {"observations": {"ABC-1": {"status": "Ready for dev",
                                            "transitions": [{"id": "21", "to": "Dev in progress"}]}}}
-    plan = outbox.plan(c, observed["observations"], clock=clock)
+    plan = outbox_service.plan(observed["observations"])
     sends = [{"id": s["id"], "key": s["key"], "transition_id": s["transition_id"], "to_status": s["to_status"]}
              for s in plan["send"]]
     assert sends and sends[0]["transition_id"] == "21"
@@ -75,5 +71,5 @@ def test_send_goes_through_the_outbox_and_writes_only_what_was_planned(tmp_path)
     answer = [{"id": sends[0]["id"], "ok": True, "jira_status": "Dev in progress"}]
     results = jira_session.execute_sends(sends, workdir=tmp_path, runner=fake(json.dumps(answer), calls), **KW)
     assert "transitionJiraIssue" in " ".join(calls[0][calls[0].index("--allowedTools") + 1:calls[0].index("--disallowedTools")])
-    outbox.ack(c, results, clock=clock)
+    outbox_service.ack(results)
     assert c.execute("select status from outbox").fetchone()[0] == "sent"

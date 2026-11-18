@@ -36,12 +36,12 @@ def test_only_state_changing_events_wake_the_loop():
 def test_the_route_refuses_a_bad_signature_and_wakes_on_a_good_one(tmp_path, monkeypatch):
     import json
     from fastapi.testclient import TestClient
-    from tests.support import board
+    from wf.adapters.persistence.sqlite.schema import connect
     from wf.adapters.config import workspace as cfgmod
     from wf.entrypoints.web import agents_views
     from wf.entrypoints.web.app import create_app
     monkeypatch.setenv("WF_GITHUB_WEBHOOK_SECRET", SECRET)
-    db = tmp_path / "wf.sqlite"; board.connect(db).close()
+    db = tmp_path / "wf.sqlite"; connect(db).close()
     cfg = tmp_path / "workflow.json"; cfgmod.save(cfgmod.Config(), cfg)
     client = TestClient(create_app(config_path=cfg, db_path=db, webhook_token="t"))
     body = json.dumps({"action": "completed"}).encode()

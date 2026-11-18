@@ -1,8 +1,12 @@
 import json
 import urllib.parse
 
+from wf.adapters.persistence.sqlite.changes import SqliteChangeLog
+from wf.adapters.persistence.sqlite.lifecycle import SqliteLifecycleLog
 from wf.adapters.tracker.integrations import JiraClient
-from tests.support.pipeline import Pipeline
+from wf.application.tracker.intake import Intake
+from wf.application.tracker.supervisor import Supervisor, no_agents_wired
+from wf.application.tracker.triggers import TriggerPipeline
 
 BODY = {
     "changelog": {
@@ -22,8 +26,12 @@ MAPPING = {"Ready for dev": "ready_for_dev", "Dev in progress": "in_dev"}
 
 
 def make(tmp_path, clock=lambda: 0.0, search=lambda: []):
-    return Pipeline(tmp_path / "wf.sqlite", fetch_changelog=lambda k: BODY, search_keys=search, clock=clock,
-                    status_to_stage=lambda: MAPPING)
+    """The trigger pipeline over the SQLite change and lifecycle logs, with a fixed stage mapping."""
+    changes = SqliteChangeLog(tmp_path / "wf.sqlite", clock=clock)
+    log = SqliteLifecycleLog(tmp_path / "wf.sqlite", clock=clock)
+    return TriggerPipeline(
+        changes=changes, intake=Intake(changes, lambda k: BODY, clock),
+        supervisor=Supervisor(log, lambda: MAPPING, no_agents_wired), search_keys=search, clock=clock)
 
 
 def test_webhook_routes_each_change_once(tmp_path):

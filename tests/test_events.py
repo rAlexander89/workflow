@@ -1,14 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.support.events import (
-    ChangeStore,
-    Intake,
-    StatusChange,
-    issue_key_from_webhook,
-    parse_changelog,
-    poll_due,
-)
+from wf.adapters.persistence.sqlite.changes import SqliteChangeLog as ChangeStore
+from wf.application.tracker.intake import Intake
+from wf.domain.tracker.changelog import issue_key_from_webhook, parse_changelog, poll_due
 from wf.adapters.tracker.integrations import Check
 from wf.entrypoints.web.app import create_app
 
@@ -51,7 +46,7 @@ def test_store_records_each_change_once(tmp_path):
 
 def test_webhook_and_poll_for_same_change_count_once(tmp_path):
     store = ChangeStore(tmp_path / "wf.sqlite")
-    intake = Intake(store, lambda key: BODY)
+    intake = Intake(store, lambda key: BODY, lambda: 0.0)
     assert len(intake.handle("ENG-7")) == 2  # the webhook trigger
     # the hourly poll reads the same issue again later
     store.mark_webhook(0)
@@ -68,13 +63,13 @@ def test_poll_runs_only_after_two_quiet_hours():
 def test_poll_skipped_when_webhook_recent(tmp_path):
     store = ChangeStore(tmp_path / "wf.sqlite", clock=lambda: 1000.0)
     store.mark_webhook(1000.0)
-    intake = Intake(store, lambda key: BODY)
+    intake = Intake(store, lambda key: BODY, lambda: 0.0)
     assert intake.poll(lambda: ["ENG-7"], now=1000.0 + 60) == []
 
 
 def test_poll_fetches_when_quiet(tmp_path):
     store = ChangeStore(tmp_path / "wf.sqlite", clock=lambda: 0.0)
-    intake = Intake(store, lambda key: BODY)
+    intake = Intake(store, lambda key: BODY, lambda: 0.0)
     found = intake.poll(lambda: ["ENG-7"], now=5 * 60 * 60)
     assert len(found) == 2
 
