@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from wf.adapters.config import workspace as workspace_config
+from wf.adapters.credentials import bots as bot_accounts
+from wf.adapters.env import local_app
 from wf.adapters.forge import forge as forges
 from wf.adapters.forge import github_status
 from wf.adapters.persistence.sqlite.agent_runs import SqliteAgentRuns
@@ -27,12 +29,17 @@ from wf.adapters.persistence.sqlite.changes import SqliteChangeLog
 from wf.adapters.persistence.sqlite.lifecycle import SqliteLifecycleLog
 from wf.adapters.persistence.sqlite.pause import SqlitePauseState
 from wf.adapters.persistence.sqlite.runs import SqliteRunRegistry
+from wf.adapters.persistence.sqlite.usage import SqliteUsageLog
 from wf.adapters.persistence.sqlite.schema import connect
+from wf.adapters import model as models
+from wf.adapters.model.recording import record_call
 from wf.adapters.runner import claude_code
 from wf.adapters.runner.claude_code import ClaudeCodeRunner
 from wf.adapters.runner.prompts import FilePromptLibrary
 from wf.adapters.tracker import integrations, jira_session
+from wf.adapters.system import preflight
 from wf.adapters.workflow.engine import LangGraphEngine
+from wf.adapters.workspace import onboarding
 from wf.adapters.workspace.git import GitWorkspace, ShellTestRunner
 from wf.application.board.tickets import TicketCommands
 from wf.application.delivery.deploy_graph import DeployGraphService
@@ -234,6 +241,48 @@ class Container:
             bot_domain=c.bots.domain if c.bots.enabled else "", bot_credentials=c.bots.credentials_file)
 
     # --- what is not tied to one board connection ----------------------------------------------------
+
+    @property
+    def bots(self):
+        """Bot account setup: what each bot may do, and where its credentials live."""
+        return bot_accounts
+
+    @property
+    def local_app(self):
+        """Start and stop the project's app on this machine."""
+        return local_app
+
+    @property
+    def machine_checks(self):
+        """`wf doctor`: checks that this machine can run the Claude Code flow."""
+        return preflight
+
+    @property
+    def repo_finder(self):
+        """Find the git repos the user works on."""
+        return onboarding
+
+    @staticmethod
+    def agent_profiles() -> list[str]:
+        return sorted(claude_code.PROFILES)
+
+    def usage_log(self) -> SqliteUsageLog:
+        return SqliteUsageLog(self.db_path, clock=self.clock)
+
+    def lifecycle(self) -> SqliteLifecycleLog:
+        return SqliteLifecycleLog(self.db_path, clock=self.clock)
+
+    @staticmethod
+    def model(cfg, env: dict):
+        """The language-model adapter the config names."""
+        return models.build_model(cfg, env=env)
+
+    def record_model_call(self, agent: str, response, *, ticket: str | None = None, provider: str | None = None) -> None:
+        record_call(self.usage_log(), agent, response, ticket=ticket, provider=provider)
+
+    @staticmethod
+    def agent_runner(gateway_command: list[str], claude_bin: str | None) -> ClaudeCodeRunner:
+        return ClaudeCodeRunner(gateway_command=gateway_command, claude_bin=claude_bin)
 
     def runs(self) -> SqliteRunRegistry:
         return SqliteRunRegistry(self.db_path)

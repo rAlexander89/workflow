@@ -110,6 +110,10 @@ class BoardSync(Protocol):
         status has no tickets. Returns the payload."""
         ...
 
+    def sync_file(self, path, clock: Callable[[], float]) -> SyncResult:
+        """Read a payload file and apply it. Raises BoardError if the file cannot be read."""
+        ...
+
     def apply(self, data: dict, clock: Callable[[], float]) -> SyncResult:
         """Raises BoardError, with nothing applied, if the payload is invalid or the sync fails."""
         ...

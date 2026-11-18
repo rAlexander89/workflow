@@ -1,25 +1,49 @@
-"""`wf` command: link and check internal repos and Jira boards, and run the workflow shell."""
+"""`wf` command: link and check internal repos and Jira boards, and run the workflow shell.
+
+Each command translates its arguments into calls on the use cases the composition root provides.
+"""
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import json
+import os
+import shlex
 import sys
+import time
 from pathlib import Path
 
-from wf import config as cfgmod
-from wf import graph
-from wf.integrations import JiraClient, check_repo
+from wf.application.settings import RepoSettings, Settings
+from wf.bootstrap import Container
+from wf.domain.board.errors import BoardError
+from wf.domain.delivery.merge_gate import MergeBlocked
+from wf.domain.delivery.roles import REFINEMENT_STAGES  # noqa: F401
+from wf.domain.delivery.routing import route
+from wf.domain.execution.agent_run import AgentRunRequest
+from wf.domain.execution.model import Message, ModelRequest, ProviderNotAllowed
+from wf.domain.workspace.config import BOARD_PROVIDERS, BotsConfig, ConfigError
+from wf.application.delivery.publish import PublishBlocked
 
 
 def _cfg_path(args) -> Path:
-    return Path(args.config) if args.config else cfgmod.default_path()
+    given = getattr(args, "config", None)
+    return Path(given) if given else Container.default_config_path()
+
+
+def _db_path(args) -> Path:
+    return Path(getattr(args, "db", None) or os.environ.get("WF_DB", "wf.sqlite"))
+
+
+def _container(args) -> Container:
+    return Container(_db_path(args), _cfg_path(args))
 
 
 def cmd_link_repo(args) -> int:
-    path = _cfg_path(args)
-    c = cfgmod.load(path)
+    container = _container(args)
+    c = container.config()
     if c.add_repo(args.name, args.repo_path):
-        cfgmod.save(c, path)
+        container.save_config(c)
         print(f"linked repo {args.name} at {args.repo_path}")
     else:
         print(f"repo {args.name} already linked")
@@ -27,10 +51,10 @@ def cmd_link_repo(args) -> int:
 
 
 def cmd_link_board(args) -> int:
-    path = _cfg_path(args)
-    c = cfgmod.load(path)
+    container = _container(args)
+    c = container.config()
     if c.add_board(args.provider, args.ref, args.label or ""):
-        cfgmod.save(c, path)
+        container.save_config(c)
         print(f"linked {args.provider} board {args.ref}")
     else:
         print(f"{args.provider} board {args.ref} already linked")
@@ -38,14 +62,14 @@ def cmd_link_board(args) -> int:
 
 
 def cmd_unlink(args) -> int:
-    path = _cfg_path(args)
-    c = cfgmod.load(path)
+    container = _container(args)
+    c = container.config()
     if args.kind == "repo":
         removed = c.remove_repo(args.ref)
     else:
         removed = c.remove_board(args.kind, args.ref)
     if removed:
-        cfgmod.save(c, path)
+        container.save_config(c)
         print(f"unlinked {args.kind} {args.ref}")
         return 0
     print(f"{args.kind} {args.ref} is not linked", file=sys.stderr)
@@ -53,7 +77,7 @@ def cmd_unlink(args) -> int:
 
 
 def cmd_list(args) -> int:
-    c = cfgmod.load(_cfg_path(args))
+    c = _container(args).config()
     if not c.repos and not c.boards:
         print("nothing linked yet")
         return 0
@@ -66,11 +90,12 @@ def cmd_list(args) -> int:
 
 
 def cmd_check(args) -> int:
-    c = cfgmod.load(_cfg_path(args))
-    jira = JiraClient()
+    container = _container(args)
+    c = container.config()
+    jira = container.issue_reader()
     failures = 0
     for r in c.repos:
-        res = check_repo(r)
+        res = container.check_repo(r)
         failures += not res.ok
         print(f"{'ok  ' if res.ok else 'FAIL'} repo  {r.name}: {res.detail}")
     for b in c.boards:
@@ -83,47 +108,56 @@ def cmd_check(args) -> int:
 
 
 def cmd_run(args) -> int:
-    out = graph.start(Path(args.db), args.thread, args.request)
+    out = Container(Path(args.db), _cfg_path(args)).workflows().start(args.thread, args.request)
     _print_run(out)
     return 0
 
 
-def cmd_usage(args) -> int:
-    import os
-    from wf import usage
+def format_audit(rows, largest) -> str:
+    if not rows:
+        return "no model calls recorded yet"
+    lines = [
+        f"{'agent':<16}{'calls':>7}{'avg in':>10}{'avg out':>10}{'total in':>12}{'total out':>12}{'cache hit':>11}",
+    ]
+    for a in rows:
+        lines.append(
+            f"{a.agent:<16}{a.calls:>7}{a.avg_input:>10.0f}{a.avg_output:>10.0f}"
+            f"{a.total_input:>12}{a.total_output:>12}{a.cache_hit_ratio:>10.0%}"
+        )
+    if largest:
+        lines.append("")
+        lines.append("largest calls (input + output):")
+        for r in largest:
+            lines.append(
+                f"  {r['agent']:<14} {r['ticket'] or '-':<12} {r['model']:<22} "
+                f"in {r['input_tokens']:>7}  out {r['output_tokens']:>6}"
+            )
+    return "\n".join(lines)
 
-    ledger = usage.UsageLedger(Path(args.db or os.environ.get("WF_DB", "wf.sqlite")))
-    print(usage.format_audit(ledger.audit(), ledger.largest_calls()))
+
+def cmd_usage(args) -> int:
+    ledger = _container(args).usage_log()
+    print(format_audit(ledger.audit(), ledger.largest_calls()))
     return 0
 
 
-def _db_path(args) -> Path:
-    import os
-
-    return Path(args.db or os.environ.get("WF_DB", "wf.sqlite"))
-
-
 def cmd_route(args) -> int:
-    from wf import orchestrator
-
     labels = {"hotfix"} if args.hotfix else set()
-    mapping = orchestrator.board_status_to_stage(_db_path(args))
-    d = orchestrator.route(args.status, labels, mapping)
+    with _container(args).session() as s:
+        mapping = s.queries.status_to_stage()
+    d = route(args.status, labels, mapping)
     print(f"action: {d.action}\nowner:  {d.owner or '-'}\nwhy:    {d.reason}")
     return 0
 
 
 def cmd_sync(args) -> int:
-    from wf import board
-
-    conn = board.connect(_db_path(args))
+    container = _container(args)
     try:
-        result = board.sync_file(conn, Path(args.from_file))
-    except board.BoardError as e:
+        with container.session() as s:
+            result = s.sync.sync_file(Path(args.from_file), container.clock)
+    except BoardError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    finally:
-        conn.close()
     summary = ", ".join(f"{k}={v}" for k, v in sorted(result.counts.items()))
     print(f"synced: {summary or 'nothing to change'}")
     for problem in result.problems:
@@ -131,45 +165,33 @@ def cmd_sync(args) -> int:
     return 0
 
 
-def cmd_board(args) -> int:
-    from wf import board
+def _print_tickets(rows) -> None:
+    current = None
+    for r in rows:
+        stage = r["stage"] or "(unmapped)"
+        if stage != current:
+            print(f"\n{stage}")
+            current = stage
+        print(f"  {r['key']:<12} {r['jira_status']:<20} {r['summary']}")
 
-    conn = board.connect(_db_path(args))
-    try:
-        rows = board.active_board(conn)
+
+def cmd_board(args) -> int:
+    with _container(args).session() as s:
+        rows = s.queries.active_board()
         if not rows:
             print("no tickets in the active sprint (run `wf sync` first)")
-        current = None
-        for r in rows:
-            stage = r["stage"] or "(unmapped)"
-            if stage != current:
-                print(f"\n{stage}")
-                current = stage
-            print(f"  {r['key']:<12} {r['jira_status']:<20} {r['summary']}")
-        for b in board.unmapped_stages(conn):
+        _print_tickets(rows)
+        for b in s.queries.unmapped_stages():
             print(f"blocked: {b['project_key']} stage {b['stage']!r}: {b['reason']}", file=sys.stderr)
-    finally:
-        conn.close()
     return 0
 
 
 def cmd_backlog(args) -> int:
-    from wf import board
-
-    conn = board.connect(_db_path(args))
-    try:
-        rows = board.backlog(conn)
-        if not rows:
-            print("the backlog is empty (run `wf sync` with a backlog payload first)")
-        current = None
-        for r in rows:
-            stage = r["stage"] or "(unmapped)"
-            if stage != current:
-                print(f"\n{stage}")
-                current = stage
-            print(f"  {r['key']:<12} {r['jira_status']:<20} {r['summary']}")
-    finally:
-        conn.close()
+    with _container(args).session() as s:
+        rows = s.queries.backlog()
+    if not rows:
+        print("the backlog is empty (run `wf sync` with a backlog payload first)")
+    _print_tickets(rows)
     return 0
 
 
@@ -208,8 +230,7 @@ def _ask(prompt: str, default: str = "") -> str:
 
 
 def cmd_init(args) -> int:
-    from wf import onboarding
-
+    container = _container(args)
     path = _cfg_path(args)
     interactive = sys.stdin.isatty()
 
@@ -232,7 +253,7 @@ def cmd_init(args) -> int:
             print("Pass --root FOLDER to say where your code lives.", file=sys.stderr)
             return 2
         roots = [_ask("Step 2: folder where you keep your code", "~/code")]
-    candidates = onboarding.suggest([Path(r) for r in roots])
+    candidates = container.repo_finder.suggest([Path(r) for r in roots])
     if not candidates:
         print("No git repositories found under " + ", ".join(roots) + ".")
         return 0
@@ -262,7 +283,7 @@ def cmd_init(args) -> int:
         return 0
 
     # 4. Link them, with where each one's code is hosted.
-    cfg = cfgmod.load(path)
+    cfg = container.config()
     for n in chosen:
         c = candidates[n - 1]
         name = c.name
@@ -275,7 +296,7 @@ def cmd_init(args) -> int:
         else:
             print(f"{name} is already linked")
     try:
-        cfgmod.save(cfg, path)
+        container.save_config(cfg)
     except OSError as e:
         print(f"error: could not save {path}: {e}", file=sys.stderr)
         return 2
@@ -283,14 +304,12 @@ def cmd_init(args) -> int:
     print("\nNext: in your Claude session, run the Jira sync (see docs/sync-format.md),")
     print("then `wf sync payload.json` and `wf doctor`.")
     if interactive:
-        from wf import bots as _bots
-
-        c_ = cfgmod.load(path)
+        c_ = container.config()
         if not c_.bots.enabled:
-            result = _bots.setup_interactive(c_.bots.domain or "example.com")
+            result = container.bots.setup_interactive(c_.bots.domain or "example.com")
             if result:
-                c_.bots = cfgmod.BotsConfig(**result)
-                cfgmod.save(c_, path)
+                c_.bots = BotsConfig(**result)
+                container.save_config(c_)
     return 0
 
 
@@ -304,69 +323,52 @@ def _load_json(path: str):
 
 
 def cmd_outbox(args) -> int:
-    import json
-    from wf import board, outbox
-
-    conn = board.connect(_db_path(args))
+    container = _container(args)
     try:
-        if args.outbox_cmd == "list":
-            print(json.dumps(outbox.listing(conn, args.status), indent=2))
-        elif args.outbox_cmd == "pending":
-            print(json.dumps(outbox.pending(conn), indent=2))
-        elif args.outbox_cmd == "plan":
-            data = _load_json(args.from_file)
-            print(json.dumps(outbox.plan(conn, data.get("observations", data)), indent=2))
-        elif args.outbox_cmd == "ack":
-            print(json.dumps(outbox.ack(conn, _load_json(args.from_file)), indent=2))
-        elif args.outbox_cmd == "retry":
-            outbox.retry(conn, args.id)
-            print(f"item {args.id} is pending again")
-    except board.BoardError as e:
+        with container.session() as s:
+            if args.outbox_cmd == "list":
+                print(json.dumps(s.outbox.listing(args.status), indent=2))
+            elif args.outbox_cmd == "pending":
+                print(json.dumps(s.outbox.pending(), indent=2))
+            elif args.outbox_cmd == "plan":
+                data = _load_json(args.from_file)
+                print(json.dumps(s.outbox.plan(data.get("observations", data)), indent=2))
+            elif args.outbox_cmd == "ack":
+                print(json.dumps(s.outbox.ack(_load_json(args.from_file)), indent=2))
+            elif args.outbox_cmd == "retry":
+                s.outbox.retry(args.id)
+                print(f"item {args.id} is pending again")
+    except BoardError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    finally:
-        conn.close()
     return 0
 
 
 def cmd_status(args) -> int:
-    import time
-    from wf import board
-
-    conn = board.connect(_db_path(args))
-    try:
-        s = board.status(conn, time.time())
-    finally:
-        conn.close()
-    run = s["last_sync"]
+    with _container(args).session() as session:
+        run = session.queries.last_sync()
+        counts = session.queries.counts()
+    age = None if run is None or run["finished_at"] is None else int(time.time()) - run["finished_at"]
     if run is None:
         print("never synced: run the sync from your Claude session, then `wf sync`")
     else:
-        age = s["age_seconds"]
         age_text = "unknown" if age is None else f"{age // 3600}h {age % 3600 // 60}m ago"
         print(f"last sync: {run['kind']} {run['status']}, {age_text}")
         if run["status"] == "failed":
             print(f"  error: {run['error']}")
         elif age is not None and age > 24 * 3600:
             print("  stale: run a sync from your Claude session")
-    print(f"active sprint: {s['active_tickets']} tickets; backlog: {s['backlog_tickets']} tickets")
-    for f in s["flagged"]:
+    print(f"active sprint: {counts['active_tickets']} tickets; backlog: {counts['backlog_tickets']} tickets")
+    for f in counts["flagged"]:
         print(f"flagged: {f['key']} {f['flags']}")
-    for u in s["unmapped_stages"]:
+    for u in counts["unmapped_stages"]:
         print(f"blocked: {u['project_key']} stage {u['stage']!r}: {u['reason']}")
     return 0
 
 
 def cmd_pickup(args) -> int:
-    import json
-
-    from wf import board, pickup
-
-    conn = board.connect(_db_path(args))
-    try:
-        plan = pickup.plan_pickup(conn, apply=args.apply)
-    finally:
-        conn.close()
+    with _container(args).session() as s:
+        plan = s.pickup().plan(apply=args.apply)
     print(json.dumps(plan.to_dict(), indent=2))
     if not args.apply:
         print("dry run: nothing was moved. Re-run with --apply to move the picked tickets.", file=sys.stderr)
@@ -374,56 +376,40 @@ def cmd_pickup(args) -> int:
 
 
 def cmd_move(args) -> int:
-    from wf import board
-
-    conn = board.connect(_db_path(args))
     try:
-        board.move_stage(conn, args.key, args.stage, args.actor, args.reason)
-    except board.BoardError as e:
+        with _container(args).session() as s:
+            s.tickets.move_stage(args.key, args.stage, args.actor, args.reason)
+    except BoardError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    finally:
-        conn.close()
     print(f"{args.key} -> {args.stage}")
     return 0
 
 
 def cmd_flag(args) -> int:
-    from wf import board
-
-    conn = board.connect(_db_path(args))
     try:
-        if args.clear:
-            board.clear_flag(conn, args.key, args.flag, args.actor)
-            print(f"cleared {args.flag} on {args.key}")
-        else:
-            board.set_flag(conn, args.key, args.flag, args.actor, args.reason or "")
-            print(f"flagged {args.key} {args.flag}")
-    except board.BoardError as e:
+        with _container(args).session() as s:
+            if args.clear:
+                s.tickets.clear_flag(args.key, args.flag, args.actor)
+                print(f"cleared {args.flag} on {args.key}")
+            else:
+                s.tickets.set_flag(args.key, args.flag, args.actor, args.reason or "")
+                print(f"flagged {args.key} {args.flag}")
+    except BoardError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    finally:
-        conn.close()
     return 0
 
 
 def cmd_sprints(args) -> int:
-    from wf import board
-
-    conn = board.connect(_db_path(args))
-    try:
-        for s in board.sprints(conn, args.state):
-            print(f"{s['state']:<7} {s['id']:<8} {s['name']}")
-    finally:
-        conn.close()
+    with _container(args).session() as s:
+        for sp in s.queries.sprints(args.state):
+            print(f"{sp['state']:<7} {sp['id']:<8} {sp['name']}")
     return 0
 
 
 def cmd_kill(args) -> int:
-    import os
-    from wf import orchestrator
-
-    store = orchestrator.LifecycleStore(Path(args.db or os.environ.get("WF_DB", "wf.sqlite")))
+    store = _container(args).lifecycle()
     if args.state == "status":
         print("kill switch is", "ON" if store.killed() else "off")
     else:
@@ -433,17 +419,11 @@ def cmd_kill(args) -> int:
 
 
 def cmd_poll(args) -> int:
-    import os
-    from wf.integrations import JiraClient
-    from wf.pipeline import Pipeline
-
+    container = _container(args)
     jql = os.environ.get("WF_POLL_JQL", "updated >= -2h ORDER BY updated DESC")
-    jira = JiraClient()
-    pipe = Pipeline(
-        Path(args.db or os.environ.get("WF_DB", "wf.sqlite")),
-        fetch_changelog=jira.get_issue_changelog,
-        search_keys=lambda: jira.search_keys(jql),
-    )
+    jira = container.issue_reader()
+    pipe = container.trigger_pipeline(
+        fetch_changelog=jira.get_issue_changelog, search_keys=lambda: jira.search_keys(jql))
     decisions = pipe.poll()
     if not decisions:
         print("poll skipped (webhooks recent) or nothing new")
@@ -453,7 +433,7 @@ def cmd_poll(args) -> int:
 
 
 def cmd_resume(args) -> int:
-    out = graph.resume(Path(args.db), args.thread, approved=args.approve)
+    out = Container(Path(args.db), _cfg_path(args)).workflows().resume(args.thread, approved=args.approve)
     _print_run(out)
     return 0
 
@@ -464,9 +444,7 @@ def _print_run(out: dict) -> None:
 
 
 def cmd_model_status(args) -> int:
-    import os
-
-    c = cfgmod.load(_cfg_path(args))
+    c = _container(args).config()
     m = c.model
     if m.provider == "anthropic-api":
         key_state = (f"{m.api_key_env} is set" if os.environ.get(m.api_key_env)
@@ -485,58 +463,47 @@ def cmd_model_status(args) -> int:
 
 
 def cmd_model_set(args) -> int:
-    from dataclasses import replace
-
-    path = _cfg_path(args)
-    c = cfgmod.load(path)
+    container = _container(args)
+    c = container.config()
     updates = {k: v for k, v in {"provider": args.provider, "model": args.model,
                                  "base_url": args.base_url, "api_key_env": args.api_key_env}.items() if v}
     if args.claude_code_access is not None:
         updates["claude_code_access"] = args.claude_code_access
-    c.model = replace(c.model, **updates)
-    cfgmod.save(c, path)
+    c.model = dataclasses.replace(c.model, **updates)
+    container.save_config(c)
     print(f"model set: provider={c.model.provider} model={c.model.model}")
     return 0
 
 
-def _repo_path(c, name: str | None) -> Path:
-    repos = {r.name: r for r in c.repos}
+def _settings_for(args, container: Container) -> Settings:
+    """The settings with this command's choices applied: which repo, where runs go, which model and tests."""
+    s = container.settings()
+    repos = {r.name: r for r in s.repos}
     if not repos:
         raise SystemExit("error: no internal repo is linked; run `wf link repo NAME PATH` first")
+    name = getattr(args, "repo", None)
     if name is None:
         if len(repos) > 1:
             raise SystemExit(f"error: several repos are linked; pick one with --repo ({', '.join(sorted(repos))})")
         name = next(iter(repos))
     if name not in repos:
         raise SystemExit(f"error: no linked repo named {name!r}")
-    return Path(repos[name].path)
-
-
-def _runs_dir(c, given: str | None) -> Path:
-    import os
-
-    return Path(given or os.path.expanduser(c.agents.runs_dir)).resolve()
+    runs = getattr(args, "runs", None)
+    return dataclasses.replace(
+        s, repos=(repos[name],), runs_dir=Path(runs).resolve() if runs else s.runs_dir,
+        model=getattr(args, "model", None) or s.model, test_cmd=getattr(args, "test_cmd", None) or s.test_cmd)
 
 
 def cmd_agents_tick(args) -> int:
-    import json
-    import shutil
-
-    from wf import agents, board, claude_run
-
-    c = cfgmod.load(_cfg_path(args))
-    conn = board.connect(_db_path(args))
+    container = _container(args)
+    # a hand-run pass does not use the deployed-dev regression url
+    settings = dataclasses.replace(_settings_for(args, container), regression_url="")
     try:
-        actions = agents.tick(
-            conn, repo=_repo_path(c, args.repo), runs_dir=_runs_dir(c, args.runs), access=c.model.claude_code_access,
-            model=args.model or c.agents.model, test_cmd=args.test_cmd or c.agents.test_cmd, app_cmd=c.agents.app_cmd, app_url=c.agents.app_url, bot_domain=c.bots.domain if c.bots.enabled else "", bot_credentials=c.bots.credentials_file, dry_run=not args.apply,
-            claude_bin=shutil.which(claude_run.CLAUDE_BIN),
-        )
-    except (claude_run.ProviderNotAllowed, ValueError, board.BoardError) as e:
+        with container.session() as s:
+            actions = s.passes(settings).plan(dry_run=not args.apply)
+    except (ProviderNotAllowed, ValueError, BoardError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    finally:
-        conn.close()
     print(json.dumps(actions, indent=2))
     if not args.apply:
         print("dry run: nothing was run. Re-run with --apply to run these agents.", file=sys.stderr)
@@ -544,44 +511,35 @@ def cmd_agents_tick(args) -> int:
 
 
 def cmd_agents_merge(args) -> int:
-    from wf import board, merge
-
-    c = cfgmod.load(_cfg_path(args))
-    conn = board.connect(_db_path(args))
+    container = _container(args)
+    settings = _settings_for(args, container)
     try:
-        head = merge.merge(conn, args.key, repo=_repo_path(c, args.repo), runs_dir=_runs_dir(c, args.runs),
-                           test_cmd=args.test_cmd or c.agents.test_cmd)
-    except (merge.MergeBlocked, board.BoardError) as e:
+        with container.session() as s:
+            head = s.merge(settings).merge(args.key, settings.test_cmd)
+    except (MergeBlocked, BoardError) as e:
         print(f"blocked: {e}", file=sys.stderr)
         return 2
-    finally:
-        conn.close()
     print(f"{args.key} merged at {head[:8]}")
     return 0
 
 
 def cmd_agents_publish(args) -> int:
-    from wf import board, github_agent
-
-    c = cfgmod.load(_cfg_path(args))
-    conn = board.connect(_db_path(args))
+    container = _container(args)
+    settings = _settings_for(args, container)
     try:
-        url = github_agent.open_pull_request(conn, args.key, repo=_repo_path(c, args.repo),
-                                             confirm=args.confirm)
-    except (github_agent.PublishBlocked, board.BoardError) as e:
+        with container.session() as s:
+            url = s.publish(settings).open_pull_request(args.key, confirm=args.confirm)
+    except (PublishBlocked, BoardError) as e:
         print(f"blocked: {e}", file=sys.stderr)
         return 2
-    finally:
-        conn.close()
     print(url)
     return 0
 
 
 def cmd_bots_setup(args) -> int:
-    from wf import bots
-
-    path = _cfg_path(args)
-    c = cfgmod.load(path)
+    container = _container(args)
+    bots = container.bots
+    c = container.config()
     domain = args.domain or c.bots.domain or "example.com"
     if args.yes:
         written = bots.write_credentials(bots.credentials_path(),
@@ -592,14 +550,13 @@ def cmd_bots_setup(args) -> int:
     else:
         result = bots.setup_interactive(domain)
     if result:
-        c.bots = cfgmod.BotsConfig(**result)
-        cfgmod.save(c, path)
+        c.bots = BotsConfig(**result)
+        container.save_config(c)
     return 0
 
 
 def cmd_bots_permissions(args) -> int:
-    from wf import bots
-
+    bots = _container(args).bots
     print("Bots may:")
     for line in bots.ALLOWED:
         print(f"  + {line}")
@@ -610,20 +567,21 @@ def cmd_bots_permissions(args) -> int:
 
 
 def cmd_env(args) -> int:
-    from wf import envs
-
-    c = cfgmod.load(_cfg_path(args))
-    state_dir = _runs_dir(c, None) / "envs"
+    container = _container(args)
+    app = container.local_app
+    settings = container.settings()
+    state_dir = settings.runs_dir / "envs"
     if args.env_cmd == "status":
-        st = envs.status(state_dir, args.name or "app")
+        st = app.status(state_dir, args.name or "app")
         print("not running" if not st or not st["running"] else f"running at {st['url']} (pid {st['pid']})")
         return 0
     if args.env_cmd == "down":
-        print("stopped" if envs.down(args.name or "app", state_dir=state_dir) else "nothing to stop")
+        print("stopped" if app.down(args.name or "app", state_dir=state_dir) else "nothing to stop")
         return 0
-    repo = _repo_path(c, args.repo)
+    repo = _settings_for(args, container).repo_path()
     try:
-        st = envs.up(args.name or "app", repo=repo, app_cmd=c.agents.app_cmd, state_dir=state_dir, app_url=c.agents.app_url)
+        st = app.up(args.name or "app", repo=repo, app_cmd=settings.app_cmd, state_dir=state_dir,
+                    app_url=settings.app_url)
     except (ValueError, RuntimeError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -632,26 +590,14 @@ def cmd_env(args) -> int:
 
 
 def cmd_run_claude(args) -> int:
-    import shlex
-    import shutil
-
-    from wf import claude_run
-    from wf.model import ProviderNotAllowed
-
-    c = cfgmod.load(_cfg_path(args))
+    container = _container(args)
+    c = container.config()
     try:
-        result = claude_run.run(
-            worktree=Path(args.worktree),
-            prompt=Path(args.prompt_file).read_text(),
-            system_prompt=Path(args.system_prompt_file).read_text(),
-            model=args.model or c.model.model,
-            run_dir=Path(args.run_dir),
-            profile=args.profile,
-            gateway_command=shlex.split(args.gateway_cmd),
-            access=c.model.claude_code_access,
-            timeout=float(args.timeout),
-            claude_bin=shutil.which(claude_run.CLAUDE_BIN),
-        )
+        result = container.agent_runner(shlex.split(args.gateway_cmd), container.claude_bin()).run(AgentRunRequest(
+            worktree=Path(args.worktree), prompt=Path(args.prompt_file).read_text(),
+            system_prompt=Path(args.system_prompt_file).read_text(), model=args.model or c.model.model,
+            run_dir=Path(args.run_dir), role=args.profile, access=c.model.claude_code_access,
+            timeout=float(args.timeout)))
     except (ProviderNotAllowed, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -665,22 +611,16 @@ def cmd_run_claude(args) -> int:
 
 
 def cmd_ask(args) -> int:
-    import os
-
-    from wf.model import ModelRequest, Message, build_model
-    from wf.model.recording import record_call
-    from wf.usage import UsageLedger
-
-    c = cfgmod.load(_cfg_path(args))
-    model = build_model(c.model, env=dict(os.environ))
+    container = _container(args)
+    c = container.config()
+    model = container.model(c.model, env=dict(os.environ))
     request = ModelRequest(
         system=args.system or "",
         messages=(Message("user", args.prompt),),
         max_tokens=args.max_tokens,
     )
     resp = model.complete(request)
-    ledger = UsageLedger(Path(args.db or os.environ.get("WF_DB", "wf.sqlite")))
-    record_call(ledger, args.agent, resp, ticket=args.ticket, provider=model.name)
+    container.record_model_call(args.agent, resp, ticket=args.ticket, provider=model.name)
     print(resp.text)
     print(f"\n[{model.name} {resp.model}: {resp.input_tokens} in, {resp.output_tokens} out, "
           f"{resp.cache_read_tokens} cache-read, {resp.duration_ms} ms]", file=sys.stderr)
@@ -688,11 +628,9 @@ def cmd_ask(args) -> int:
 
 
 def cmd_doctor(args) -> int:
-    from wf import preflight
-
-    c = cfgmod.load(_cfg_path(args))
-    checks = preflight.run_checks(claude_code_access=c.model.claude_code_access)
-    print(preflight.format_checks(checks))
+    container = _container(args)
+    checks = container.machine_checks.run_checks(claude_code_access=container.config().model.claude_code_access)
+    print(container.machine_checks.format_checks(checks))
     failed = [ch for ch in checks if ch.failed]
     if failed:
         print(f"\n{len(failed)} check(s) failed.", file=sys.stderr)
@@ -713,13 +651,13 @@ def build_parser() -> argparse.ArgumentParser:
     lr.add_argument("repo_path", metavar="PATH", help="path to the local git repository")
     lr.set_defaults(func=cmd_link_repo)
     lb = lsub.add_parser("board", help="link a Jira board")
-    lb.add_argument("provider", choices=cfgmod.BOARD_PROVIDERS)
+    lb.add_argument("provider", choices=BOARD_PROVIDERS)
     lb.add_argument("ref", help="numeric Jira board id")
     lb.add_argument("--label", help="a name to show in `wf list`")
     lb.set_defaults(func=cmd_link_board)
 
     un = sub.add_parser("unlink", help="remove a linked repo or board")
-    un.add_argument("kind", choices=["repo", *cfgmod.BOARD_PROVIDERS])
+    un.add_argument("kind", choices=["repo", *BOARD_PROVIDERS])
     un.add_argument("ref")
     un.set_defaults(func=cmd_unlink)
 
@@ -918,6 +856,6 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except cfgmod.ConfigError as e:
+    except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

@@ -300,5 +300,8 @@ class SqliteBoardSync:
     def carry_workflow_statuses(self, data: dict) -> dict:
         return carry_workflow_statuses(self._conn, data)
 
+    def sync_file(self, path, clock: Callable[[], float]) -> SyncResult:
+        return sync_file(self._conn, Path(path), clock)
+
     def apply(self, data: dict, clock: Callable[[], float]) -> SyncResult:
         return apply_payload(self._conn, data, clock)

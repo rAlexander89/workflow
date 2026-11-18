@@ -14,6 +14,10 @@ class IssueReader(Protocol):
         """The issue with its changelog, from the tracker's REST API."""
         ...
 
+    def search_keys(self, jql: str, page_size: int = 100) -> list[str]:
+        """The keys of the issues a JQL search finds."""
+        ...
+
     def check_board(self, board) -> "CheckResult": ...
 
 
