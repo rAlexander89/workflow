@@ -98,7 +98,7 @@ def test_the_event_stream_opens_and_sends_the_board(client):
                 break
 
 def test_a_card_that_changes_column_is_sent_as_a_move():
-    from wf.entrypoints.web.agents_views import board_events
+    from wf.entrypoints.web.viewmodels.pipeline import board_events
     prev = {"ABC-1": ("in_dev", "<article>a</article>")}
     now = {"ABC-1": ("pr_open", "<article>a</article>")}
     events = board_events(prev, {}, now, {})
@@ -107,7 +107,7 @@ def test_a_card_that_changes_column_is_sent_as_a_move():
 
 
 def test_board_events_send_only_what_changed():
-    from wf.entrypoints.web.agents_views import board_events
+    from wf.entrypoints.web.viewmodels.pipeline import board_events
     prev = {"ABC-1": ("in_dev", "<a>1</a>"), "ABC-2": ("in_dev", "<a>2</a>"), "ABC-3": ("qa", "<a>3</a>")}
     now = {"ABC-1": ("in_dev", "<a>1 changed</a>"), "ABC-2": ("in_dev", "<a>2</a>"), "ABC-4": ("qa", "<a>4</a>")}
     kinds = sorted((e["type"], e["key"]) for e in board_events(prev, {}, now, {}))
@@ -135,7 +135,7 @@ def test_the_pr_card_is_a_template_and_escapes_what_it_shows(client):
 
 def test_the_pr_card_template_shows_the_verdict_and_escapes_reasons():
     from types import SimpleNamespace
-    from wf.entrypoints.web.agents_views import templates
+    from wf.entrypoints.web.rendering import templates
     ctx = dict(empty="", key="K-1", branch="agent/K-1", head="a" * 40, pr="https://h/p/1", summary="2 files changed",
                approved="qa", last_run="ok", merged=False,
                verdict=SimpleNamespace(ok=False, reasons=["checks <b>failed</b>"]))
