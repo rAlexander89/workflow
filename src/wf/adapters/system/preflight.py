@@ -96,3 +96,13 @@ def run_checks(
 def format_checks(checks: list[Check]) -> str:
     marks = {"ok": "ok  ", "warn": "warn", "fail": "FAIL"}
     return "\n".join(f"[{marks[c.status]}] {c.name}: {c.detail}" for c in checks)
+
+
+class MacMachineChecks:
+    """MachineChecks for this machine."""
+
+    def run_checks(self, *, claude_code_access: bool) -> list:
+        return run_checks(claude_code_access=claude_code_access)
+
+    def format_checks(self, checks: list) -> str:
+        return format_checks(checks)

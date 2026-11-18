@@ -120,3 +120,16 @@ def down(name: str, *, state_dir: Path, timeout: float = 10.0) -> bool:
                 pass
     _state_file(state_dir, name).unlink(missing_ok=True)
     return True
+
+
+class LocalAppEnvironment:
+    """AppEnvironment over a local process recorded in a state file."""
+
+    def status(self, state_dir: Path, name: str) -> dict | None:
+        return status(state_dir, name)
+
+    def up(self, name: str, *, repo: Path, app_cmd: str, state_dir: Path, app_url: str = "") -> dict:
+        return up(name, repo=repo, app_cmd=app_cmd, state_dir=state_dir, app_url=app_url)
+
+    def down(self, name: str, *, state_dir: Path) -> bool:
+        return down(name, state_dir=state_dir)

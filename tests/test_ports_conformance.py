@@ -6,7 +6,12 @@ import pytest
 from tests import fakes
 from wf.adapters.persistence.sqlite import agent_runs, board, board_queries, board_sync, changes, lifecycle, pause, runs
 from wf.adapters.persistence.sqlite import usage
+from wf.adapters.credentials.bots import FileBotAccounts
+from wf.adapters.env.local_app import LocalAppEnvironment
+from wf.adapters.system.preflight import MacMachineChecks
+from wf.adapters.workspace.onboarding import GitRepoFinder
 from wf.application.ports import board as board_ports
+from wf.application.ports import setup as setup_ports
 from wf.application.ports import persistence as ports
 
 PAIRS = [
@@ -22,6 +27,8 @@ PAIRS = [
     (board_ports.OutboxQueue, board.SqliteOutboxQueue), (board_ports.OutboxQueue, fakes.MemoryOutboxQueue),
     (board_ports.BoardSync, board_sync.SqliteBoardSync),
     (board_ports.BoardQueries, board_queries.SqliteBoardQueries),
+    (setup_ports.BotAccounts, FileBotAccounts), (setup_ports.AppEnvironment, LocalAppEnvironment),
+    (setup_ports.MachineChecks, MacMachineChecks), (setup_ports.RepoFinder, GitRepoFinder),
 ]
 
 

@@ -543,9 +543,9 @@ def cmd_bots_setup(args) -> int:
     domain = args.domain or c.bots.domain or "example.com"
     if args.yes:
         written = bots.write_credentials(bots.credentials_path(),
-                                         {r: {"email": bots.account_email(r, domain)} for r in bots.ROLES})
+                                         {r: {"email": bots.account_email(r, domain)} for r in bots.roles})
         print(f"credentials written to {bots.credentials_path()} (new: {', '.join(written) or 'none'})")
-        result = {"enabled": True, "domain": domain, "roles": list(bots.ROLES),
+        result = {"enabled": True, "domain": domain, "roles": list(bots.roles),
                   "credentials_file": str(bots.credentials_path())}
     else:
         result = bots.setup_interactive(domain)
@@ -558,10 +558,10 @@ def cmd_bots_setup(args) -> int:
 def cmd_bots_permissions(args) -> int:
     bots = _container(args).bots
     print("Bots may:")
-    for line in bots.ALLOWED:
+    for line in bots.allowed:
         print(f"  + {line}")
     print("Bots may not:")
-    for line in bots.NOT_ALLOWED:
+    for line in bots.not_allowed:
         print(f"  - {line}")
     return 0
 

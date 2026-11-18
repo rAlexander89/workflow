@@ -103,3 +103,23 @@ def setup_interactive(
     say("Passwords are not shown here. Read the file yourself when you need one.")
     return {"enabled": True, "domain": domain, "roles": list(ROLES),
             "credentials_file": str(path or credentials_path())}
+
+
+class FileBotAccounts:
+    """BotAccounts over a credentials file outside the repos."""
+
+    roles = ROLES
+    allowed = ALLOWED
+    not_allowed = NOT_ALLOWED
+
+    def credentials_path(self) -> Path:
+        return credentials_path()
+
+    def account_email(self, role: str, domain: str) -> str:
+        return account_email(role, domain)
+
+    def write_credentials(self, path: Path, accounts: dict[str, dict[str, str]]) -> list[str]:
+        return write_credentials(path, accounts)
+
+    def setup_interactive(self, domain: str) -> dict | None:
+        return setup_interactive(domain)

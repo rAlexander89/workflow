@@ -85,3 +85,10 @@ def suggest(roots: list[Path], email: str | None = None, max_depth: int = 3) -> 
     email = user_email() if email is None else email
     candidates = [describe(p, email) for p in find_repos(roots, max_depth)]
     return sorted(candidates, key=lambda c: (c.my_commits, c.last_commit), reverse=True)
+
+
+class GitRepoFinder:
+    """RepoFinder that looks at git repos on disk, counting the user's own commits."""
+
+    def suggest(self, roots: list[Path]) -> list:
+        return suggest(roots)

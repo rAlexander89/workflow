@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from wf.adapters.config import workspace as workspace_config
-from wf.adapters.credentials import bots as bot_accounts
-from wf.adapters.env import local_app
+from wf.adapters.credentials.bots import FileBotAccounts
+from wf.adapters.env.local_app import LocalAppEnvironment
 from wf.adapters.forge import forge as forges
 from wf.adapters.forge import github_status
 from wf.adapters.persistence.sqlite.agent_runs import SqliteAgentRuns
@@ -38,9 +38,9 @@ from wf.adapters.runner.claude_code import ClaudeCodeRunner
 from wf.adapters.runner.prompts import FilePromptLibrary
 from wf.adapters.runner.toolbox import AppSettings, LocalAppSession, WorktreeToolbox
 from wf.adapters.tracker import integrations, jira_session
-from wf.adapters.system import preflight
+from wf.adapters.system.preflight import MacMachineChecks
 from wf.adapters.workflow.engine import LangGraphEngine
-from wf.adapters.workspace import onboarding
+from wf.adapters.workspace.onboarding import GitRepoFinder
 from wf.adapters.workspace.git import GitWorkspace, ShellTestRunner
 from wf.application.board.tickets import TicketCommands
 from wf.application.delivery.deploy_graph import DeployGraphService
@@ -57,6 +57,7 @@ from wf.application.harness.passes import PassService
 from wf.application.harness.run_ticket import RunTicketService
 from wf.application.ports.forge import Forge
 from wf.application.ports.harness import ActivityLog, TaskRunner
+from wf.application.ports.setup import AppEnvironment, BotAccounts, MachineChecks, RepoFinder
 from wf.application.settings import RepoSettings, Settings
 from wf.domain.board.errors import BoardError
 from wf.application.tracker.intake import Intake
@@ -244,24 +245,20 @@ class Container:
     # --- what is not tied to one board connection ----------------------------------------------------
 
     @property
-    def bots(self):
-        """Bot account setup: what each bot may do, and where its credentials live."""
-        return bot_accounts
+    def bots(self) -> BotAccounts:
+        return FileBotAccounts()
 
     @property
-    def local_app(self):
-        """Start and stop the project's app on this machine."""
-        return local_app
+    def local_app(self) -> AppEnvironment:
+        return LocalAppEnvironment()
 
     @property
-    def machine_checks(self):
-        """`wf doctor`: checks that this machine can run the Claude Code flow."""
-        return preflight
+    def machine_checks(self) -> MachineChecks:
+        return MacMachineChecks()
 
     @property
-    def repo_finder(self):
-        """Find the git repos the user works on."""
-        return onboarding
+    def repo_finder(self) -> RepoFinder:
+        return GitRepoFinder()
 
     @staticmethod
     def agent_profiles() -> list[str]:
