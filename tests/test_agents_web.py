@@ -113,3 +113,16 @@ def test_board_events_send_only_what_changed():
     now = {"ABC-1": ("in_dev", "<a>1 changed</a>"), "ABC-2": ("in_dev", "<a>2</a>"), "ABC-4": ("qa", "<a>4</a>")}
     kinds = sorted((e["type"], e["key"]) for e in board_events(prev, {}, now, {}))
     assert kinds == [("card.add", "ABC-4"), ("card.remove", "ABC-3"), ("card.update", "ABC-1")]
+
+
+def test_a_flagged_ticket_shows_its_flag_and_the_reason_on_the_page(tmp_path):
+    db = tmp_path / "wf.sqlite"
+    c = board.connect(db)
+    sync(c, payload(tickets=[ticket("ABC-1", status="Ready for dev")]))
+    board.set_flag(c, "ABC-1", "needs-human", "qa", "the acceptance criteria are unclear")
+    c.close()
+    cfg = tmp_path / "workflow.json"
+    cfgmod.save(cfgmod.Config(), cfg)
+    page = TestClient(create_app(config_path=cfg, db_path=db, webhook_token="t")).get("/agents")
+    assert page.status_code == 200
+    assert "needs-human" in page.text and "the acceptance criteria are unclear" in page.text

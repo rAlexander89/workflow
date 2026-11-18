@@ -67,10 +67,9 @@ class HarnessCycle:
         s = self._settings
         if self._pause.is_paused():
             return jira_changed  # paused: no Jira, merge, GitHub, or agent work starts
-        still_changed = False
+        still_changed = jira_changed
         if jira_changed and s.claude_code_access:
-            if not self._tasks.start("jira sync", self._work.jira_sync):
-                still_changed = True  # busy: try again on the next pass
+            still_changed = not self._tasks.start("jira sync", self._work.jira_sync)  # busy: try again next time
         if not (s.auto_run and s.repos and s.claude_code_access):
             return still_changed
         if self._tasks.busy():

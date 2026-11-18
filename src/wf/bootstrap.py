@@ -45,10 +45,20 @@ from wf.application.harness.run_ticket import RunTicketService
 from wf.application.ports.forge import Forge
 from wf.application.ports.harness import ActivityLog, TaskRunner
 from wf.application.settings import RepoSettings, Settings
+from wf.domain.board.errors import BoardError
 from wf.application.tracker.outbox import OutboxService
 
 PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 GATEWAY_COMMAND = [sys.executable, "-m", "wf.gateway_server"]
+
+
+class _NoRepoWorkspace:
+    """The workspace when no repo is linked: every use says so, the way a missing repo always has."""
+
+    def __getattr__(self, name: str):
+        def refuse(*args, **kwargs):
+            raise BoardError("no internal repo is linked; add one on the Links page")
+        return refuse
 
 
 class NullLog:
@@ -96,8 +106,10 @@ class Session:
 
     # --- what depends on the linked repo -----------------------------------------------------------
 
-    def _workspace(self, s: Settings, repo: Path | None = None) -> GitWorkspace:
-        return GitWorkspace(repo or s.repo_path(), runs_dir=s.runs_dir)
+    def workspace(self, s: Settings) -> GitWorkspace:
+        return GitWorkspace(s.repo_path(), runs_dir=s.runs_dir) if s.repos else _NoRepoWorkspace()
+
+    _workspace = workspace
 
     def forge(self, s: Settings) -> Forge:
         """The forge the linked repo is hosted on: GitHub, or GitLab at its host (GitHub for a local repo)."""
@@ -183,8 +195,15 @@ class Container:
         self.runner_secret = os.environ.get("WF_RUNNER_SECRET", "") if runner_secret is None else runner_secret
         self.claude_bin = claude_bin or (lambda: shutil.which(claude_code.CLAUDE_BIN))
 
+    @staticmethod
+    def default_config_path() -> Path:
+        return workspace_config.default_path()
+
     def config(self) -> workspace_config.Config:
         return workspace_config.load(self.config_path)
+
+    def save_config(self, cfg: workspace_config.Config) -> None:
+        workspace_config.save(cfg, self.config_path)
 
     def settings(self) -> Settings:
         c = self.config()

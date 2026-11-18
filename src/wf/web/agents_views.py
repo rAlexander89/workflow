@@ -1,27 +1,33 @@
 """Agents page: start the agents, merge, and publish from the browser.
 
 Each action runs in a background thread, because an agent run takes minutes. The page
-shows what is running, the last result, and each ticket's next step. The same functions
-back the `wf agents` commands, so the UI and the CLI can't disagree.
+shows what is running, the last result, and each ticket's next step. The handlers only translate HTTP into
+calls on the use cases the composition root hands them, so the UI and the CLI can't disagree.
 """
 
 from __future__ import annotations
 
+import html as _html
 import json
 import os
 import threading
 import time
 import traceback
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
-from wf import agents, board, github_webhook, jira_webhook, pause
-from wf import config as cfgmod
-from wf import claude_run, github_agent, jira_session, merge, outbox
+from wf.bootstrap import Container
+from wf.domain.board.errors import BoardError
+from wf.domain.delivery import github_webhook
+from wf.domain.delivery.branches import branch_for
+from wf.domain.delivery.roles import STAGE_ROLE
+from wf.domain.tracker import jira_webhook
 from wf.web import pipeline as stage_view
+from wf.application.harness.run_ticket import NotStarted
 
 HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=str(HERE / "templates"))
@@ -64,83 +70,53 @@ def _start(label: str, fn) -> bool:
     return True
 
 
-def _repo_path(c, name: str | None) -> Path:
-    repos = {r.name: r for r in c.repos}
-    if not repos:
-        raise board.BoardError("no internal repo is linked; add one on the Links page")
-    if name is None:
-        if len(repos) > 1:
-            raise board.BoardError("several repos are linked; this page supports one")
-        name = next(iter(repos))
-    return Path(repos[name].path)
+class _Activity:
+    """The activity log and the one-at-a-time background runner, for the use cases that need them."""
 
+    def log(self, message: str) -> None:
+        _log(message)
 
-def _link(c):
-    return c.repos[0] if c.repos else None
+    def start(self, label: str, work) -> bool:
+        return _start(label, work)
 
-
-def _forge_for(c):
-    """The forge the linked repo is hosted on: GitHub, or GitLab at its host."""
-    from wf import forge as _forge
-    link = _link(c)
-    if link is None or link.forge == "github":
-        return _forge.GitHub()
-    if link.forge == "gitlab":
-        return _forge.GitLab(host=link.host)
-    return None
-
-
-def _repo_slug(c) -> str:
-    repos = c.repos
-    if not repos or not repos[0].remote:
-        raise board.BoardError("the linked repo has no GitHub remote (org/repo) set")
-    return repos[0].remote
-
-
-def _runs_dir(c) -> Path:
-    return Path(os.path.expanduser(c.agents.runs_dir)).resolve()
+    def busy(self) -> bool:
+        with _lock:
+            return bool(_state["running"])
 
 
 def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
-    db_path = Path(db_path)
-    config_path = Path(config_path)
+    activity = _Activity()
+    container = Container(Path(db_path), Path(config_path), log=activity)
 
     def page(request: Request, **ctx) -> HTMLResponse:
         return templates.TemplateResponse(request, "agents.html", {"active": "agents", **ctx})
 
-    def settings():
-        c = cfgmod.load(config_path)
-        return c
-
     def context() -> dict:
-        c = settings()
-        conn = board.connect(db_path)
-        agents.ensure_schema(conn)
-        try:
-            rows = sorted(board.pipeline_rows(conn), key=lambda r: r["key"])
-            queued = outbox.pending_count(conn)
-            paused = pause.is_paused(conn)
-            paused_at = pause.paused_since(conn)
+        settings = container.settings()
+        with container.session() as s:
+            pipeline = s.pipeline(settings)
+            deploy = s.deploy(settings)
+            rows = sorted(s.queries.pipeline_rows(), key=lambda r: r["key"])
+            queued = s.outbox.pending_count()
+            paused = s.pause.is_paused()
+            paused_at = s.pause.paused_since()
             paused_text = time.strftime("%H:%M", time.localtime(paused_at)) if paused_at else ""
             by_stage: dict[str, list[dict]] = {}
             for r in rows:
-                last_code = agents.last_exit_code(conn, r["key"])
+                last_code = s.agent_runs.last_exit_code(r["key"])
                 flags = r["flags"]
-                reason = board.last_event_detail(conn, r["key"], "flag")
-                idle = agents.idle_reason(conn, r["key"])
+                reason = s.tickets.last_note(r["key"], "flag")
                 by_stage.setdefault(r["stage"], []).append({
                     "key": r["key"], "stage": r["stage"], "summary": r["summary"], "flag_list": flags,
-                    "idle": idle,
-                    "flag_reason": (reason["detail"] or "") if reason and flags else "",
+                    "idle": pipeline.idle_reason(r["key"]),
+                    "flag_reason": (reason or "") if flags else "",
                     "in_sprint": r["sprint_state"] == "active",
-                    "role": None if flags else agents.STAGE_ROLE.get(r["stage"]),
+                    "role": None if flags else STAGE_ROLE.get(r["stage"]),
                     "can_merge": False,
                     "can_publish": r["stage"] == "deployed",
-                    "can_deploy": r["stage"] in ("regression", "performance") and agents.prod_ready(conn, r["key"], _repo_path(c, None)),
+                    "can_deploy": r["stage"] in ("regression", "performance") and deploy.prod_ready(r["key"]),
                     "last": {"exit_code": last_code} if last_code is not None else None,
                 })
-        finally:
-            conn.close()
         columns = []
         for st in stage_view.ordered_stages():
             columns.append({"stage": st["name"], "label": st["label"], "owner": st["owner"], "role": st["role"],
@@ -148,9 +124,9 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         with _lock:
             state = {"running": _state["running"], "last": _state["last"], "log": list(_state["log"])}
         return {"columns": columns, "queued": queued, "paused": paused, "paused_text": paused_text,
-                "state": state, "repos": c.repos,
-                "access": c.model.claude_code_access, "test_cmd": c.agents.test_cmd,
-                "model": c.agents.model, "runs_dir": str(_runs_dir(c))}
+                "state": state, "repos": settings.repos,
+                "access": settings.claude_code_access, "test_cmd": settings.test_cmd,
+                "model": settings.model, "runs_dir": str(settings.runs_dir)}
 
     @app.get("/agents", response_class=HTMLResponse)
     def agents_page(request: Request):
@@ -160,99 +136,34 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
     def board_partial(request: Request):
         return templates.TemplateResponse(request, "_board.html", context())
 
-    def pass_work(c):
-        access = c.model.claude_code_access
-
-        def work():
-            conn = board.connect(db_path)
-            try:
-                for key in agents.advance_pipeline(conn, repo=_repo_path(c, None)):
-                    _log(f"{key}: moved on by the harness")
-                actions = agents.tick(
-                    conn, repo=_repo_path(c, None), runs_dir=_runs_dir(c), access=access,
-                    model=c.agents.model, test_cmd=c.agents.test_cmd, app_cmd=c.agents.app_cmd,
-                    app_url=c.agents.app_url, regression_url=c.agents.regression_url,
-                    bot_domain=c.bots.domain if c.bots.enabled else "",
-                    bot_credentials=c.bots.credentials_file, dry_run=False, claude_bin=_claude_bin(),
-                )
-                for a in actions:
-                    _log(f"{a['key']}: {a['role']} on {a['stage']}"
-                         + (f" -> {a['skipped']}" if a.get("skipped") else f" (exit {a.get('exit_code')})"))
-                if not actions:
-                    _log("nothing to run: no ticket is waiting for an agent")
-            finally:
-                conn.close()
-        return work
-
-    def ready_work(c) -> bool:
-        conn = board.connect(db_path)
-        try:
-            actions = agents.tick(conn, repo=_repo_path(c, None), runs_dir=_runs_dir(c),
-                                  access=c.model.claude_code_access, model=c.agents.model, dry_run=True)
-        except Exception:
-            return False
-        finally:
-            conn.close()
-        return any(not a.get("skipped") for a in actions)
-
     @app.post("/agents/pause")
     def pause_work(request: Request):
-        conn = board.connect(db_path)
-        try:
-            changed = pause.pause(conn)
-        finally:
-            conn.close()
+        with container.session() as s:
+            changed = s.pause.pause("paused by a person", int(container.clock()))
         _log("work paused: no new run or stage move starts; a run already in progress finishes"
              if changed else "work was already paused")
         return RedirectResponse("/agents", status_code=303)
 
     @app.post("/agents/resume")
     def resume_work(request: Request):
-        conn = board.connect(db_path)
-        try:
-            changed = pause.resume(conn)
-        finally:
-            conn.close()
+        with container.session() as s:
+            changed = s.pause.resume(int(container.clock()))
         _log("work resumed" if changed else "work was not paused")
         _wake.set()  # the auto loop picks the board up right away
         return RedirectResponse("/agents", status_code=303)
 
     @app.post("/agents/tick")
     def run_pass(request: Request):
-        c = settings()
-        conn = board.connect(db_path)
-        try:
-            paused = pause.is_paused(conn)
-        finally:
-            conn.close()
+        settings = container.settings()
+        with container.session() as s:
+            paused = s.pause.is_paused()
         if paused:
             _log("work is paused: resume it before starting a pass")
-        elif not c.repos:
+        elif not settings.repos:
             _log("no repo is linked: add one on the Links page first")
-        elif not _start("one pass", pass_work(c)):
+        elif not _start("one pass", container.background_work(settings).run_pass):
             _log("a pass is already running")
         return RedirectResponse("/agents", status_code=303)
-
-    def observe_tick(c):
-        """Watch the merge and the dev and prod deploys on GitHub. Runs every tick, pass or no pass."""
-        from wf import observe
-        conn = board.connect(db_path)
-        try:
-            for key in [r["key"] for r in board.keys_in_stages(conn, ("merged",))]:
-                if observe.latest(conn, key, "merge:") is None:
-                    sha = observe.merge_sha(conn, key, _repo_slug(c), forge=_forge_for(c))
-                    if sha:
-                        _log(f"{key}: merged to main at {sha[:8]}")
-                state = observe.observe_dev(conn, key, _repo_slug(c), forge=_forge_for(c))
-                if state == "success":
-                    _log(f"{key}: deployed to dev")
-                elif state == "failed":
-                    _log(f"{key}: dev deploy FAILED")
-            for key in [r["key"] for r in board.keys_in_stages(conn, ("deployed",))]:
-                if observe.observe_prod(conn, key, _repo_slug(c), forge=_forge_for(c)) == "success":
-                    _log(f"{key}: deployed to prod (observed)")
-        finally:
-            conn.close()
 
     @app.post("/webhooks/github")
     async def github_hook(request: Request):
@@ -272,116 +183,39 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             _wake.wait(15)  # a webhook wakes it early; otherwise it checks every 15 seconds
             _wake.clear()
             try:
-                c = settings()
-                conn = board.connect(db_path)
-                try:
-                    if pause.is_paused(conn):
-                        continue  # paused: no Jira, merge, GitHub, or agent work starts
-                finally:
-                    conn.close()
-                if _jira_changed.is_set() and c.model.claude_code_access:
-                    _jira_changed.clear()
-                    if not _start("jira sync", _jira_sync_work(c)):
-                        _jira_changed.set()  # busy: try again on the next pass
-                if not (c.agents.auto_run and c.repos and c.model.claude_code_access):
-                    continue
-                with _lock:
-                    if _state["running"]:
-                        continue
-                from wf import merge as _merge
-                link = _link(c)
-                if link is not None and link.forge == "local":
-                    conn = board.connect(db_path)
-                    try:
-                        for key in _merge.local_merge_when_clear(conn, repo=_repo_path(c, None), runs_dir=_runs_dir(c),
-                                                                  test_cmd=c.agents.test_cmd):
-                            _log(f"{key}: merged into the local main (no hosted remote)")
-                    finally:
-                        conn.close()
-                observe_tick(c)
-                conn = board.connect(db_path)
-                try:
-                    pending = board.pending_links(conn)
-                finally:
-                    conn.close()
-                if pending and c.model.claude_code_access:
-                    def link_work(pairs=pending):
-                        linked = jira_session.create_blocking_links(pairs, **_session_kw(c))
-                        conn2 = board.connect(db_path)
-                        try:
-                            board.mark_linked(conn2, linked)
-                        finally:
-                            conn2.close()
-                        _log(f"linked in Jira: {', '.join(f'{p} blocks {d}' for p, d in linked)}")
-                    _start("link tickets in Jira", link_work)
-                conn = board.connect(db_path)
-                try:
-                    moved = agents.advance_pipeline(conn, repo=_repo_path(c, None))
-                finally:
-                    conn.close()
-                for key in moved:
-                    _log(f"{key}: moved on by the harness")
-                from wf import github_agent
-                conn = board.connect(db_path)
-                try:
-                    for key in github_agent.publish_ready(conn, repo=_repo_path(c, None)):
-                        _log(f"{key}: GitHub PR opened")
-                    for key in github_agent.merge_when_clear(conn, repo=_repo_path(c, None)):
-                        _log(f"{key}: GitHub PR merged (QA passed, checks green, nothing flagged)")
-                finally:
-                    conn.close()
-                if ready_work(c):
-                    _start("auto pass", pass_work(c))
+                settings = container.settings()
+                jira_changed = _jira_changed.is_set()
+                with container.session() as s:
+                    waiting = s.cycle(settings, activity).run_once(jira_changed=jira_changed)
+                if jira_changed and not waiting:
+                    _jira_changed.clear()  # the sync started; otherwise it stays set for the next cycle
             except Exception as e:  # never let the loop die
                 _log(f"auto pass check failed: {e}")
 
     threading.Thread(target=auto_loop, daemon=True).start()
 
     def _ticket_url(key: str, notice: str) -> str:
-        from urllib.parse import quote
         return f"/board/ticket/{key}?notice={quote(notice)}"
 
     @app.post("/agents/run/{key}")
     def run_one(key: str):
-        c = settings()
-        conn = board.connect(db_path)
-        try:
-            if pause.is_paused(conn):
-                notice = "Not started: work is paused. Resume it, then run the agent."
-                _log(f"{key}: {notice}")
-                return RedirectResponse(_ticket_url(key, notice), status_code=303)
-            idle = agents.idle_reason(conn, key)
-            if idle is not None and not idle["can_run"]:
-                notice = f"Not started: {idle['why']}"
-                _log(f"{key}: {notice}")
-                return RedirectResponse(_ticket_url(key, notice), status_code=303)
-            stage = board.get_ticket(conn, key)
-            if stage is None or stage.stage not in agents.STAGE_ROLE:
-                notice = "Not started: no agent works this stage."
-                _log(f"{key}: {notice}")
-                return RedirectResponse(_ticket_url(key, notice), status_code=303)
-            role = (agents.refinement_role(conn, key) if stage.stage in agents.REFINEMENT_STAGES
-                    else agents.STAGE_ROLE[stage.stage])
-        finally:
-            conn.close()
+        settings = container.settings()
+        with container.session() as s:
+            try:
+                plan = s.run_ticket(settings).prepare(key)
+            except NotStarted as e:
+                _log(f"{key}: {e}")
+                return RedirectResponse(_ticket_url(key, str(e)), status_code=303)
 
         def work():
-            conn = board.connect(db_path)
-            try:
-                if stage.stage == "ready_for_dev":
-                    board.move_stage(conn, key, "in_dev", "dev", "dev pickup")
-                res = agents.run_agent(conn, role, key, repo=_repo_path(c, None), runs_dir=_runs_dir(c),
-                                       access=c.model.claude_code_access, model=c.agents.model,
-                                       test_cmd=c.agents.test_cmd, app_cmd=c.agents.app_cmd, app_url=c.agents.app_url, regression_url=c.agents.regression_url, bot_domain=c.bots.domain if c.bots.enabled else "", bot_credentials=c.bots.credentials_file, claude_bin=_claude_bin())
-                code = res.run.exit_code if res.run else None
-                _log(f"{key}: {role} finished (exit {code})")
-            finally:
-                conn.close()
+            with container.session() as s:
+                exit_code = s.run_ticket(settings).execute(plan)
+            _log(f"{key}: {plan.role} finished (exit {exit_code})")
 
-        if not _start(f"{key} {role}", work):
+        if not _start(f"{key} {plan.role}", work):
             notice = "Not started: another action is already running. Try again when it finishes."
         else:
-            notice = f"Started the {role} agent on {key}. The result appears below and in the Activity log."
+            notice = f"Started the {plan.role} agent on {key}. The result appears below and in the Activity log."
         _log(f"{key}: {notice}")
         return RedirectResponse(_ticket_url(key, notice), status_code=303)
 
@@ -389,11 +223,9 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         return templates.get_template(name).render(**ctx)
 
     def _ticket_live_html(key: str) -> str:
-        conn = board.connect(db_path)
-        try:
-            idle = agents.idle_reason(conn, key)
-        finally:
-            conn.close()
+        settings = container.settings()
+        with container.session() as s:
+            idle = s.pipeline(settings).idle_reason(key)
         with _lock:
             running = _state["running"]
         mine = running if running and running.startswith(key + " ") else None
@@ -454,36 +286,23 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         if confirm != "yes":
             _log(f"{key}: deploy to prod needs the confirm box ticked")
             return RedirectResponse("/agents", status_code=303)
-        c = settings()
-        conn = board.connect(db_path)
+        settings = container.settings()
         try:
-            if not agents.prod_ready(conn, key, _repo_path(c, None)):
-                _log(f"{key}: deploy refused: regression has not passed on the current commit")
-                return RedirectResponse("/agents", status_code=303)
-            from wf import observe
-            if not observe.start_prod_deploy(conn, key, _repo_slug(c), forge=_forge_for(c)):
-                _log(f"{key}: deploy refused: the prod workflow could not be started")
-                return RedirectResponse("/agents", status_code=303)
-            board.move_stage(conn, key, "deployed", "user", "deployed to prod by the user")
+            with container.session() as s:
+                s.deploy(settings).deploy_to_prod(key, settings.repo_slug())
             _log(f"{key} deployed to prod (by you)")
-        except board.BoardError as e:
+        except BoardError as e:
             _log(f"{key}: deploy refused: {e}")
-        finally:
-            conn.close()
         return RedirectResponse("/agents", status_code=303)
 
     @app.post("/agents/merge/{key}")
     def merge_ticket(key: str):
-        c = settings()
+        settings = container.settings()
 
         def work():
-            conn = board.connect(db_path)
-            try:
-                head = merge.merge(conn, key, repo=_repo_path(c, None), runs_dir=_runs_dir(c),
-                                   test_cmd=c.agents.test_cmd)
-                _log(f"{key} merged into main at {head[:8]}")
-            finally:
-                conn.close()
+            with container.session() as s:
+                head = s.merge(settings).merge(key, settings.test_cmd)
+            _log(f"{key} merged into main at {head[:8]}")
 
         if not _start(f"merge {key}", work):
             _log("another action is already running")
@@ -491,47 +310,24 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
 
     @app.post("/agents/publish/{key}")
     def publish_ticket(key: str, confirm: str = Form("")):
-        c = settings()
+        settings = container.settings()
         if confirm != "yes":
             _log(f"{key}: publish needs the confirm box ticked")
             return RedirectResponse("/agents", status_code=303)
 
         def work():
-            conn = board.connect(db_path)
-            try:
-                url = github_agent.open_pull_request(conn, key, repo=_repo_path(c, None), confirm=True)
-                _log(f"{key} pull request: {url}")
-            finally:
-                conn.close()
+            with container.session() as s:
+                url = s.publish(settings).open_pull_request(key, confirm=True)
+            _log(f"{key} pull request: {url}")
 
         if not _start(f"publish {key}", work):
             _log("another action is already running")
         return RedirectResponse("/agents", status_code=303)
 
-    def _session_kw(c) -> dict:
-        return {"access": c.model.claude_code_access, "workdir": _runs_dir(c) / "jira-session",
-                "model": c.agents.model, "claude_bin": _claude_bin()}
-
-    def _jira_sync_work(c):
-        def work():
-            payload = jira_session.fetch_sync_payload(**_session_kw(c))
-            conn = board.connect(db_path)
-            try:
-                board.carry_workflow_statuses(conn, payload)
-                result = board.apply_payload(conn, payload, clock=time.time)
-            finally:
-                conn.close()
-            counts = result.counts
-            _log(f"synced {len(payload['tickets'])} ticket(s) from Jira; "
-                 f"{counts.get('tickets_created', 0)} new, {counts.get('tickets_updated', 0)} updated")
-            for problem in result.problems:
-                _log(f"sync: {problem}")
-        return work
-
     @app.post("/agents/jira/sync")
     def jira_sync(next: str = Form("/agents")):
-        c = settings()
-        if not _start("jira sync", _jira_sync_work(c)):
+        settings = container.settings()
+        if not _start("jira sync", container.background_work(settings).jira_sync):
             _log("another action is already running")
         back = next if next in ("/agents", "/board/backlog") else "/agents"
         return RedirectResponse(back, status_code=303)
@@ -560,25 +356,24 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
             _wake.set()
         return {"ok": True, "event": event}
 
+    def _active_sprint():
+        with container.session() as s:
+            return s.queries.active_sprint()
+
     @app.post("/board/hopper/to-sprint")
     def hopper_to_sprint(keys: list[str] = Form(default=[])):
         """Move the tickets the browser sent into the active sprint, in one Jira write. Nothing is stored here."""
         import re as _re
         keys = [k for k in keys if _re.fullmatch(r"[A-Z][A-Z0-9]+-\d+", k)]
-        c = settings()
-        conn = board.connect(db_path)
-        try:
-            sprint = board.active_sprint(conn)
-        finally:
-            conn.close()
+        settings = container.settings()
+        sprint = _active_sprint()
         if sprint is None or not keys:
             _log("hopper: nothing to move, or no active sprint")
             return RedirectResponse("/board/backlog", status_code=303)
 
         def work():
-            moved = jira_session.move_tickets_to_sprint(keys, sprint["id"], **_session_kw(c))
-            _log(f"moved {len(moved)} ticket(s) to {sprint['name']} in Jira: {', '.join(moved)}")
-            _jira_sync_work(c)()
+            with container.session() as s:
+                s.jira(settings).move_tickets_to_sprint(keys, sprint)
 
         if not _start(f"move {len(keys)} ticket(s) to sprint", work):
             _log("another action is already running")
@@ -590,20 +385,15 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         import re as _re
         if not _re.fullmatch(r"[A-Z][A-Z0-9]+-\d+", key):
             raise HTTPException(400, "bad ticket key")
-        c = settings()
-        conn = board.connect(db_path)
-        try:
-            sprint = board.active_sprint(conn)
-        finally:
-            conn.close()
+        settings = container.settings()
+        sprint = _active_sprint()
         if sprint is None:
             _log(f"{key}: no active sprint to move into")
             return RedirectResponse(f"/board/item/{key}", status_code=303)
 
         def work():
-            jira_session.move_to_sprint(key, sprint["id"], **_session_kw(c))
-            _log(f"{key}: moved to {sprint['name']} in Jira")
-            _jira_sync_work(c)()
+            with container.session() as s:
+                s.jira(settings).move_to_sprint(key, sprint)
 
         if not _start(f"move {key} to sprint", work):
             _log("another action is already running")
@@ -611,33 +401,14 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
 
     @app.post("/agents/jira/send")
     def jira_send(confirm: str = Form("")):
-        c = settings()
+        settings = container.settings()
         if confirm != "yes":
             _log("sending to Jira needs the confirm box ticked")
             return RedirectResponse("/agents", status_code=303)
 
         def work():
-            conn = board.connect(db_path)
-            try:
-                items = outbox.pending(conn)
-                if not items:
-                    _log("nothing queued for Jira")
-                    return
-                keys = sorted({i["ticket_key"] for i in items})
-                observed = jira_session.fetch_observations(keys, **_session_kw(c))
-                plan = outbox.plan(conn, observed)
-                for skipped in plan.get("need", []):
-                    _log(f"{skipped}: Jira state not read; not sent")
-                sends = [{"id": i["id"], "key": i["key"], "transition_id": i["transition_id"],
-                          "to_status": i["to_status"]} for i in plan["send"]]
-                for s_ in sends:
-                    _log(f"will move {s_['key']} to {s_['to_status']}")
-                results = jira_session.execute_sends(sends, **_session_kw(c))
-                if results:
-                    summary = outbox.ack(conn, results)
-                    _log(f"Jira: {summary}")
-            finally:
-                conn.close()
+            with container.session() as s:
+                s.jira(settings).send_queued()
 
         if not _start("send to Jira", work):
             _log("another action is already running")
@@ -646,47 +417,30 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
     @app.get("/board/ticket/{key}/pr-card", response_class=HTMLResponse)
     def pr_card(request: Request, key: str):
         """The internal pull request for a ticket: its branch, head commit, approvals, and diff."""
-        import html as _html
-        import subprocess
-
-        c = settings()
-        conn = board.connect(db_path)
-        try:
-            row = board.get_ticket(conn, key)
-            if row is None:
+        settings = container.settings()
+        with container.session() as s:
+            if s.tickets.get(key) is None:
                 return HTMLResponse("", status_code=404)
-            branch = agents.branch_for(key)
-            try:
-                repo = _repo_path(c, None)
-            except board.BoardError:
+            branch = branch_for(key)
+            if not settings.repos:
                 return HTMLResponse('<div class="muted">No repo linked.</div>')
-            head_proc = subprocess.run(["git", "rev-parse", "--verify", "--quiet", branch], cwd=repo,
-                                       capture_output=True, text=True)
-            if head_proc.returncode != 0:
+            workspace = s.workspace(settings)
+            head = workspace.branch_head(key)
+            if head is None:
                 return HTMLResponse('<div class="muted">No branch yet. The dev run creates it.</div>')
-            head = head_proc.stdout.strip()
-            stat = subprocess.run(["git", "diff", "--stat", agents.diff_range(repo, key)], cwd=repo,
-                                  capture_output=True, text=True).stdout.strip().splitlines()
-            pr = board.last_event_detail(conn, key, "pr")
-            approvals = sorted(board.approvals_at(conn, key, head))
-            tests = agents.last_exit_code(conn, key, "dev")
-        finally:
-            conn.close()
+            stat = workspace.diff_stat(key)
+            pr = s.tickets.last_note(key, "pr")
+            approvals = sorted(s.tickets.approvals_at(key, head))
+            tests = s.agent_runs.last_exit_code(key, "dev")
+            verdict = s.merge_bot(settings).assess(key)
+            merged = bool(pr) and s.merge_bot(settings).is_merged(pr)
         summary = _html.escape(stat[-1]) if stat else "no changes against main"
-        from wf import merge_bot as _mb
-        conn2 = board.connect(db_path)
-        try:
-            verdict = _mb.assess(conn2, key, repo=_repo_path(c, None))
-        finally:
-            conn2.close()
-        from wf import github_status as _ghs
-        pr_url = board.last_event_detail(board.connect(db_path), key, "pr")
-        if pr_url and _ghs.pr_status(pr_url).get("merged"):
+        if merged:
             verdict_html = '<div class="item"><b class="ok">Merged to GitHub main</b></div>'
         else:
             verdict_html = ('<div class="item"><b class="ok">Merge bot: good to merge</b></div>' if verdict.ok else
-                        '<div class="item"><b class="bad">Merge bot: not good to merge</b><ul>'
-                        + "".join(f"<li>{_html.escape(r)}</li>" for r in verdict.reasons) + "</ul></div>")
+                            '<div class="item"><b class="bad">Merge bot: not good to merge</b><ul>'
+                            + "".join(f"<li>{_html.escape(r)}</li>" for r in verdict.reasons) + "</ul></div>")
         approved = ", ".join(approvals) if approvals else "none at this commit"
         body = f"""<div class="panel"><div class="row between"><b>{_html.escape(branch)}</b>
 <span class="muted">{head[:10]}</span></div>
@@ -700,13 +454,9 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
 
     @app.get("/board/ticket/{key}/diff", response_class=PlainTextResponse)
     def diff(key: str):
-        import subprocess
-
-        c = settings()
-        branch = agents.branch_for(key)
-        repo = _repo_path(c, None)
-        proc = subprocess.run(["git", "diff", agents.diff_range(repo, key)], cwd=repo, capture_output=True, text=True)
-        return PlainTextResponse(proc.stdout or proc.stderr or "no diff")
+        settings = container.settings()
+        with container.session() as s:
+            return PlainTextResponse(s.workspace(settings).diff_text(key) or "no diff")
 
     @app.get("/agents/state", response_class=HTMLResponse)
     def state_partial(request: Request):
@@ -734,9 +484,3 @@ def board_events(prev_cards: dict, prev_cols: dict, cards: dict, cols: dict) -> 
     for key in prev_cards.keys() - cards.keys():
         msgs.append({"type": "card.remove", "key": key})
     return msgs
-
-
-def _claude_bin() -> str | None:
-    import shutil
-
-    return shutil.which(claude_run.CLAUDE_BIN)

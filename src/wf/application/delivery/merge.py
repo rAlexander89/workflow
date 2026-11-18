@@ -72,6 +72,10 @@ class MergeBot:
         self._workspace = workspace
         self._prs = pull_requests
 
+    def is_merged(self, pr_url: str) -> bool:
+        """True once the pull request has merged on the forge."""
+        return bool(self._prs.status(pr_url).get("merged"))
+
     def assess(self, key: str) -> Verdict:
         ticket = self._commands.get(key)
         if ticket is None:

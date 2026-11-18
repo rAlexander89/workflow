@@ -71,6 +71,12 @@ class GitWorkspace:
             return f"{merge_commit}^1..{merge_commit}"
         return f"main...{branch_for(key)}"
 
+    def diff_stat(self, key: str) -> list[str]:
+        return run_git(["git", "diff", "--stat", self.diff_range(key)], self._repo).stdout.strip().splitlines()
+
+    def diff_text(self, key: str) -> str:
+        return run_git(["git", "diff", self.diff_range(key)], self._repo).stdout
+
     def branch_head(self, key: str) -> str | None:
         proc = self._run(["git", "rev-parse", "--verify", "--quiet", branch_for(key)], self._repo)
         return proc.stdout.strip() if proc.returncode == 0 else None

@@ -25,6 +25,14 @@ class Workspace(Protocol):
         """What to diff for a ticket: its changes as merged into main, or its branch against main."""
         ...
 
+    def diff_stat(self, key: str) -> list[str]:
+        """The lines of `git diff --stat` for the ticket's change, the summary last."""
+        ...
+
+    def diff_text(self, key: str) -> str:
+        """The ticket's change as a unified diff."""
+        ...
+
     def worktree_exists(self, key: str) -> bool: ...
 
     def worktree_head(self, key: str) -> str:
