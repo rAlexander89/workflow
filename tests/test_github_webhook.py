@@ -37,8 +37,8 @@ def test_the_route_refuses_a_bad_signature_and_wakes_on_a_good_one(tmp_path, mon
     import json
     from fastapi.testclient import TestClient
     from wf import board, config as cfgmod
-    from wf.web import agents_views
-    from wf.web.app import create_app
+    from wf.entrypoints.web import agents_views
+    from wf.entrypoints.web.app import create_app
     monkeypatch.setenv("WF_GITHUB_WEBHOOK_SECRET", SECRET)
     db = tmp_path / "wf.sqlite"; board.connect(db).close()
     cfg = tmp_path / "workflow.json"; cfgmod.save(cfgmod.Config(), cfg)

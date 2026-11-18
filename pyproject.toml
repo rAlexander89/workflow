@@ -26,7 +26,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"wf.web" = ["templates/*.html"]
+"wf.entrypoints.web" = ["templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

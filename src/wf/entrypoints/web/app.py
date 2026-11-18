@@ -15,12 +15,11 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from wf import config as cfgmod
-from wf import graph
-from wf.events import issue_key_from_webhook
-from wf.pipeline import Pipeline
-from wf.integrations import JiraClient, JiraError, check_repo
-from wf.runs import RunStore
+from wf.application.ports.tracker import IssueReader, TrackerError
+from wf.bootstrap import Container
+from wf.domain.tracker.changelog import issue_key_from_webhook
+from wf.domain.workspace.config import ConfigError
+from wf.entrypoints.web import activity
 
 HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=str(HERE / "templates"))
@@ -37,15 +36,16 @@ class CheckRow:
 def create_app(
     config_path: Path | None = None,
     db_path: Path | None = None,
-    jira: JiraClient | None = None,
+    jira: IssueReader | None = None,
     webhook_token: str | None = None,
 ) -> FastAPI:
-    config_path = Path(config_path or cfgmod.default_path())
+    config_path = Path(config_path or Container.default_config_path())
     db_path = Path(db_path or os.environ.get("WF_DB", "wf.sqlite"))
-    jr = jira or JiraClient()
-    runs = RunStore(db_path)
-    pipeline = Pipeline(
-        db_path,
+    container = Container(db_path, config_path, log=activity.Activity())
+    jr = jira or container.issue_reader()
+    runs = container.runs()
+    workflows = container.workflows()
+    pipeline = container.trigger_pipeline(
         fetch_changelog=lambda key: jr.get_issue_changelog(key),
         search_keys=lambda: [],  # the poll is run by `wf poll`, not by the web app
     )
@@ -66,7 +66,7 @@ def create_app(
         return RedirectResponse(url, status_code=303)
 
     def links_partial(request: Request, error: str | None = None) -> HTMLResponse:
-        c = cfgmod.load(config_path)
+        c = container.config()
         return render(request, "_links.html", repos=c.repos, boards=c.boards, error=error)
 
     # --- pages ---------------------------------------------------------------
@@ -77,7 +77,7 @@ def create_app(
 
     @app.get("/links", response_class=HTMLResponse)
     def links_page(request: Request):
-        c = cfgmod.load(config_path)
+        c = container.config()
         return render(request, "links.html", active="links", repos=c.repos, boards=c.boards, error=None)
 
     @app.get("/runs", response_class=HTMLResponse)
@@ -89,27 +89,27 @@ def create_app(
         run = runs.get(run_id)
         if run is None:
             raise HTTPException(404, "no such run")
-        snap = graph.snapshot(db_path, run_id)
+        snap = workflows.snapshot(run_id)
         return render(request, "run.html", active="runs", run=run, snap=snap)
 
     # --- links ---------------------------------------------------------------
 
     @app.post("/links/repo", response_class=HTMLResponse)
     def add_repo(request: Request, name: str = Form(...), repo_path: str = Form(...)):
-        c = cfgmod.load(config_path)
+        c = container.config()
         error = None
         try:
             c.add_repo(name, repo_path)
-            cfgmod.save(c, config_path)
-        except cfgmod.ConfigError as e:
+            container.save_config(c)
+        except ConfigError as e:
             error = str(e)
         return links_partial(request, error)
 
     @app.post("/links/repo/remove", response_class=HTMLResponse)
     def remove_repo(request: Request, name: str = Form(...)):
-        c = cfgmod.load(config_path)
+        c = container.config()
         c.remove_repo(name)
-        cfgmod.save(c, config_path)
+        container.save_config(c)
         return links_partial(request)
 
     @app.post("/links/board", response_class=HTMLResponse)
@@ -119,28 +119,28 @@ def create_app(
         ref: str = Form(...),
         label: str = Form(""),
     ):
-        c = cfgmod.load(config_path)
+        c = container.config()
         error = None
         try:
             c.add_board(provider, ref, label.strip())
-            cfgmod.save(c, config_path)
-        except cfgmod.ConfigError as e:
+            container.save_config(c)
+        except ConfigError as e:
             error = str(e)
         return links_partial(request, error)
 
     @app.post("/links/board/remove", response_class=HTMLResponse)
     def remove_board(request: Request, provider: str = Form(...), ref: str = Form(...)):
-        c = cfgmod.load(config_path)
+        c = container.config()
         c.remove_board(provider, ref)
-        cfgmod.save(c, config_path)
+        container.save_config(c)
         return links_partial(request)
 
     @app.post("/links/check", response_class=HTMLResponse)
     def check_links(request: Request):
-        c = cfgmod.load(config_path)
+        c = container.config()
         rows: list[CheckRow] = []
         for r in c.repos:
-            res = check_repo(r)
+            res = container.check_repo(r)
             rows.append(CheckRow("repo", r.name, res.ok, res.detail))
         for b in c.boards:
             res = jr.check_board(b)
@@ -161,7 +161,7 @@ def create_app(
             return {"routed": 0}
         try:
             decisions = pipeline.on_webhook(key)
-        except JiraError as e:
+        except TrackerError as e:
             raise HTTPException(502, str(e))
         return {"routed": len(decisions), "actions": [d.action for d in decisions]}
 
@@ -174,7 +174,7 @@ def create_app(
             raise HTTPException(422, "request is empty")
         run_id = uuid.uuid4().hex
         runs.create(run_id, brief)
-        out = graph.start(db_path, run_id, brief)
+        out = workflows.start(run_id, brief)
         runs.set_status(run_id, out["status"])
         return go(request, f"/runs/{run_id}")
 
@@ -183,18 +183,18 @@ def create_app(
         run = runs.get(run_id)
         if run is None:
             raise HTTPException(404, "no such run")
-        snap = graph.snapshot(db_path, run_id)
+        snap = workflows.snapshot(run_id)
         if snap["status"] == "waiting_for_approval":
-            out = graph.resume(db_path, run_id, approved=(approved == "yes"))
+            out = workflows.resume(run_id, approved=(approved == "yes"))
             runs.set_status(run_id, out["status"])
             snap = out
             run = runs.get(run_id)
         return render(request, "_run_status.html", run=run, snap=snap)
 
-    from wf.web.board_views import mount_board
+    from wf.entrypoints.web.board_views import mount_board
 
-    mount_board(app, db_path)
-    from wf.web.agents_views import mount_agents
+    mount_board(app, container)
+    from wf.entrypoints.web.agents_views import mount_agents
 
-    mount_agents(app, db_path, config_path)
+    mount_agents(app, container)
     return app

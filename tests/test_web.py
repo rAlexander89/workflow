@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from wf import config as cfgmod
 from wf.integrations import Check
-from wf.web.app import create_app
+from wf.entrypoints.web.app import create_app
 
 
 class FakeJira:
@@ -122,7 +122,7 @@ def test_a_tunneled_request_reaches_only_the_webhooks(client):
 
 
 def test_a_jira_webhook_needs_the_token_and_wakes_the_sync(client, monkeypatch):
-    from wf.web import agents_views
+    from wf.entrypoints.web import agents_views
     monkeypatch.setenv("WF_JIRA_WEBHOOK_TOKEN", "tok123")
     assert client.post("/webhooks/jira/wrong", json={"webhookEvent": "jira:issue_updated"}).status_code == 403
     agents_views._jira_changed.clear()

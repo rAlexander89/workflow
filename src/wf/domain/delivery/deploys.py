@@ -57,6 +57,21 @@ def failure_entry(run: dict, job: dict, messages: list[str]) -> dict:
             "reasons": messages[:3] or ["no message was attached to this job; open it on the forge"]}
 
 
+def job_state(job: dict) -> dict:
+    """One CI job as the deploy graph shows it: its name, link, and a single state word."""
+    if job.get("status") in ("in_progress", "queued", "waiting", "pending"):
+        state = "running"
+    elif job.get("conclusion") == "success":
+        state = "success"
+    elif job.get("conclusion") in ("failure", "timed_out", "startup_failure"):
+        state = "failed"
+    elif job.get("conclusion") in ("cancelled", "canceled", "skipped"):
+        state = job["conclusion"]
+    else:
+        state = "waiting"
+    return {"name": job.get("name", ""), "state": state, "url": job.get("url", "")}
+
+
 # --- publishing a pull request ---------------------------------------------------------------
 
 PUBLISHABLE_STAGES = ("qa_approved", "merged", "regression", "performance", "deployed")

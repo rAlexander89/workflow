@@ -12,7 +12,6 @@ import json
 import os
 import threading
 import time
-import traceback
 from pathlib import Path
 from urllib.parse import quote
 
@@ -26,67 +25,20 @@ from wf.domain.delivery import github_webhook
 from wf.domain.delivery.branches import branch_for
 from wf.domain.delivery.roles import STAGE_ROLE
 from wf.domain.tracker import jira_webhook
-from wf.web import pipeline as stage_view
+from wf.entrypoints.web import activity
+from wf.entrypoints.web import pipeline as stage_view
 from wf.application.harness.run_ticket import NotStarted
 
 HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 
-_lock = threading.Lock()
 _wake = threading.Event()  # set by a relevant GitHub webhook: the auto loop checks now, not in 15s
 _jira_changed = threading.Event()  # set by a Jira webhook: the auto loop reads Jira again now
-_state: dict = {"running": None, "log": [], "last": None}
+_log = activity.log
+_start = activity.start
 
 
-def _log(msg: str) -> None:
-    with _lock:
-        _state["log"] = (_state["log"] + [f"{time.strftime('%H:%M:%S')}  {msg}"])[-30:]
-
-
-def _start(label: str, fn) -> bool:
-    """Run one action at a time in the background. Returns False if one is already running."""
-    with _lock:
-        if _state["running"]:
-            return False
-        _state["running"] = label
-    _log(f"started: {label}")
-
-    def work():
-        try:
-            fn()
-            with _lock:
-                _state["last"] = f"{label}: done"
-            _log(f"finished: {label}")
-        except Exception as e:  # shown on the page; the thread must not die silently
-            with _lock:
-                _state["last"] = f"{label}: failed: {e}"
-            _log(f"failed: {label}: {e}")
-            _log(traceback.format_exc(limit=2).strip().splitlines()[-1])
-        finally:
-            with _lock:
-                _state["running"] = None
-
-    threading.Thread(target=work, daemon=True).start()
-    return True
-
-
-class _Activity:
-    """The activity log and the one-at-a-time background runner, for the use cases that need them."""
-
-    def log(self, message: str) -> None:
-        _log(message)
-
-    def start(self, label: str, work) -> bool:
-        return _start(label, work)
-
-    def busy(self) -> bool:
-        with _lock:
-            return bool(_state["running"])
-
-
-def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
-    activity = _Activity()
-    container = Container(Path(db_path), Path(config_path), log=activity)
+def mount_agents(app: FastAPI, container: Container) -> None:
 
     def page(request: Request, **ctx) -> HTMLResponse:
         return templates.TemplateResponse(request, "agents.html", {"active": "agents", **ctx})
@@ -121,8 +73,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         for st in stage_view.ordered_stages():
             columns.append({"stage": st["name"], "label": st["label"], "owner": st["owner"], "role": st["role"],
                             "tickets": by_stage.get(st["name"], [])})
-        with _lock:
-            state = {"running": _state["running"], "last": _state["last"], "log": list(_state["log"])}
+        state = activity.snapshot()
         return {"columns": columns, "queued": queued, "paused": paused, "paused_text": paused_text,
                 "state": state, "repos": settings.repos,
                 "access": settings.claude_code_access, "test_cmd": settings.test_cmd,
@@ -186,7 +137,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
                 settings = container.settings()
                 jira_changed = _jira_changed.is_set()
                 with container.session() as s:
-                    waiting = s.cycle(settings, activity).run_once(jira_changed=jira_changed)
+                    waiting = s.cycle(settings, activity.Activity()).run_once(jira_changed=jira_changed)
                 if jira_changed and not waiting:
                     _jira_changed.clear()  # the sync started; otherwise it stays set for the next cycle
             except Exception as e:  # never let the loop die
@@ -226,8 +177,7 @@ def mount_agents(app: FastAPI, db_path: Path, config_path: Path) -> None:
         settings = container.settings()
         with container.session() as s:
             idle = s.pipeline(settings).idle_reason(key)
-        with _lock:
-            running = _state["running"]
+        running = activity.snapshot()["running"]
         mine = running if running and running.startswith(key + " ") else None
         other = running if running and not mine else None
         return _render("_ticket_live.html", ticket={"key": key}, idle=idle, running=mine, other=other)

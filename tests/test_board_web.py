@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from wf import board, outbox
-from wf.web.app import create_app
+from wf.entrypoints.web.app import create_app
 from tests.test_board import clock
 
 STATUSES = [
@@ -143,7 +143,7 @@ def test_send_back_moves_the_ticket_and_leaves_the_reason_for_the_agent(setup):
 
 
 def test_only_one_step_is_in_progress_at_a_time():
-    from wf.web import pipeline as p
+    from wf.entrypoints.web import pipeline as p
     for stage in ["in_dev", "pr_open", "pr_in_review", "ready_for_qa", "qa_approved", "merged", "regression", "performance", "deployed"]:
         for pr in (None, "https://x/pr/1"):
             flow = p.flow_states(stage, last_run_failed=False, perf_requested=True, pr_url=pr, pr_merged=False,
@@ -153,7 +153,7 @@ def test_only_one_step_is_in_progress_at_a_time():
 
 
 def test_the_stage_marker_ends_at_done_and_prod_is_the_release():
-    from wf.web import pipeline as p
+    from wf.entrypoints.web import pipeline as p
     assert p.stage_marker("in_dev")[0] == "Stage: In Progress"
     assert p.stage_marker("regression")[0] == "Stage: Development"
     assert p.stage_marker("deployed")[0] == "Done"

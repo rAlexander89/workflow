@@ -34,11 +34,5 @@
  "pipeline.py",
  "preflight.py",
  "runs.py",
- "usage.py",
- "web/__init__.py",
- "web/agents_views.py",
- "web/app.py",
- "web/board_views.py",
- "web/deploy_graph.py",
- "web/pipeline.py"
+ "usage.py"
 ]

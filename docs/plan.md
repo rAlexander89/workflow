@@ -170,7 +170,7 @@ The container runner and the Linux runtime are not built yet.
 7. Done: the Jira outbox (`src/wf/outbox.py`, `docs/outbox.md`). Stage moves are queued in
    SQLite. The Jira agent plans them against the observed Jira state, sends at most once,
    and records each result. Comments and field updates are not built yet.
-8. Done: the board UI (`src/wf/web/board_views.py`). Pages for the active sprint, the
+8. Done: the board UI (`src/wf/entrypoints/web/board_views.py`). Pages for the active sprint, the
    backlog, one ticket, and the Jira outbox. The user can clear flags and retry outbox
    items there. Agents don't use these pages. The gateway will call `move` and
    `flag` on behalf of an agent, and check its role first.

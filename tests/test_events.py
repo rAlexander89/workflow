@@ -10,7 +10,7 @@ from wf.events import (
     poll_due,
 )
 from wf.integrations import Check
-from wf.web.app import create_app
+from wf.entrypoints.web.app import create_app
 
 BODY = {
     "key": "ENG-7",

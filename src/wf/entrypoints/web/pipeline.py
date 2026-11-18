@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from wf import agents, mapping
+from wf.domain.board import stages as mapping
+from wf.domain.delivery.roles import STAGE_ROLE
 
 STAGE_INFO: dict[str, tuple[str, str]] = {
     "backlog": ("To do", "Not started"),
@@ -28,7 +29,7 @@ def ordered_stages() -> list[dict]:
     for name in mapping.STAGES:
         label, owner = STAGE_INFO.get(name, (name, ""))
         out.append({"name": name, "label": label, "owner": owner,
-                    "role": agents.STAGE_ROLE.get(name)})
+                    "role": STAGE_ROLE.get(name)})
     return out
 
 

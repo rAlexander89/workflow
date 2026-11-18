@@ -66,7 +66,7 @@ wf flag ABC-1 needs-human --actor user --clear           # only the user clears 
 To look at the board in a browser:
 
 ```bash
-WF_DB=wf.sqlite WF_CONFIG=workflow.json python -m uvicorn --factory wf.web.app:create_app --port 8000
+WF_DB=wf.sqlite WF_CONFIG=workflow.json python -m uvicorn --factory wf.entrypoints.web.app:create_app --port 8000
 ```
 
 Then open http://127.0.0.1:8000/board. Pages: the active sprint, the backlog, each ticket,
@@ -93,7 +93,7 @@ Credentials are never written to it.
 | `docs/mac-setup.md` | Setup for the Claude Code flow on Apple Silicon Macs. |
 | `prompts/` | The system prompt for each agent role. Project rules come from configuration. |
 | `src/wf/` | Config, Jira client, event intake, supervisor, model adapters, runs, and the CLI. |
-| `src/wf/web/` | A small web app for links and runs. |
+| `src/wf/entrypoints/web/` | A small web app for links and runs. |
 | `tests/` | The test suite. |
 
 ## License

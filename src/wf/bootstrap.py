@@ -23,14 +23,19 @@ from wf.adapters.persistence.sqlite.agent_runs import SqliteAgentRuns
 from wf.adapters.persistence.sqlite.board import SqliteBoardUnitOfWork
 from wf.adapters.persistence.sqlite.board_queries import SqliteBoardQueries
 from wf.adapters.persistence.sqlite.board_sync import SqliteBoardSync
+from wf.adapters.persistence.sqlite.changes import SqliteChangeLog
+from wf.adapters.persistence.sqlite.lifecycle import SqliteLifecycleLog
 from wf.adapters.persistence.sqlite.pause import SqlitePauseState
+from wf.adapters.persistence.sqlite.runs import SqliteRunRegistry
 from wf.adapters.persistence.sqlite.schema import connect
 from wf.adapters.runner import claude_code
 from wf.adapters.runner.claude_code import ClaudeCodeRunner
 from wf.adapters.runner.prompts import FilePromptLibrary
-from wf.adapters.tracker import jira_session
+from wf.adapters.tracker import integrations, jira_session
+from wf.adapters.workflow.engine import LangGraphEngine
 from wf.adapters.workspace.git import GitWorkspace, ShellTestRunner
 from wf.application.board.tickets import TicketCommands
+from wf.application.delivery.deploy_graph import DeployGraphService
 from wf.application.delivery.merge import MergeBot, MergeService
 from wf.application.delivery.observer import DeployObserverService
 from wf.application.delivery.pickup import PickupService, RoleGateway
@@ -46,7 +51,10 @@ from wf.application.ports.forge import Forge
 from wf.application.ports.harness import ActivityLog, TaskRunner
 from wf.application.settings import RepoSettings, Settings
 from wf.domain.board.errors import BoardError
+from wf.application.tracker.intake import Intake
 from wf.application.tracker.outbox import OutboxService
+from wf.application.tracker.supervisor import Supervisor, no_agents_wired
+from wf.application.tracker.triggers import TriggerPipeline
 
 PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 GATEWAY_COMMAND = [sys.executable, "-m", "wf.gateway_server"]
@@ -157,6 +165,16 @@ class Session:
         return PublishService(commands=self.tickets, queries=self.queries, workspace=self._workspace(s),
                               target=target, bot=self.merge_bot(s), merge_pr=merge_pr)
 
+    @property
+    def pull_requests(self) -> "_PullRequests":
+        return _PullRequests(github_status.pr_status)
+
+    def deploy_graph(self, s: Settings) -> DeployGraphService:
+        link = s.link()
+        repo = link.remote if link is not None and link.forge != "local" and link.remote else None
+        return DeployGraphService(observer=self.observer(s), forge=self.forge(s) if repo else None, repo=repo,
+                                  cache=self._c.deploy_cache, clock=self._c.clock)
+
     def deploy(self, s: Settings) -> DeployService:
         return DeployService(commands=self.tickets, workspace=self._workspace(s), observer=self.observer(s))
 
@@ -194,6 +212,7 @@ class Container:
         self.log: ActivityLog = log or NullLog()
         self.runner_secret = os.environ.get("WF_RUNNER_SECRET", "") if runner_secret is None else runner_secret
         self.claude_bin = claude_bin or (lambda: shutil.which(claude_code.CLAUDE_BIN))
+        self.deploy_cache: dict = {}  # shared by every request: the deploy graph is cached briefly
 
     @staticmethod
     def default_config_path() -> Path:
@@ -213,6 +232,36 @@ class Container:
             app_cmd=c.agents.app_cmd, app_url=c.agents.app_url, regression_url=c.agents.regression_url,
             model=c.agents.model, claude_code_access=c.model.claude_code_access, auto_run=c.agents.auto_run,
             bot_domain=c.bots.domain if c.bots.enabled else "", bot_credentials=c.bots.credentials_file)
+
+    # --- what is not tied to one board connection ----------------------------------------------------
+
+    def runs(self) -> SqliteRunRegistry:
+        return SqliteRunRegistry(self.db_path)
+
+    def workflows(self) -> LangGraphEngine:
+        return LangGraphEngine(self.db_path)
+
+    @staticmethod
+    def issue_reader() -> integrations.JiraClient:
+        return integrations.JiraClient()
+
+    @staticmethod
+    def check_repo(link):
+        return integrations.check_repo(link)
+
+    def trigger_pipeline(self, fetch_changelog: Callable[[str], dict],
+                         search_keys: Callable[[], list[str]]) -> TriggerPipeline:
+        """Jira webhook and poll triggers, routed to the supervisor. It has its own stores in the database file."""
+        changes = SqliteChangeLog(self.db_path, clock=self.clock)
+        log = SqliteLifecycleLog(self.db_path, clock=self.clock)
+
+        def status_to_stage() -> dict[str, str]:
+            with self.session() as s:
+                return s.queries.status_to_stage()
+
+        return TriggerPipeline(
+            changes=changes, intake=Intake(changes, fetch_changelog, self.clock),
+            supervisor=Supervisor(log, status_to_stage, no_agents_wired), search_keys=search_keys, clock=self.clock)
 
     @contextmanager
     def session(self) -> Iterator[Session]:

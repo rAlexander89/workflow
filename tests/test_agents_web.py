@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from wf import board, config as cfgmod
-from wf.web.app import create_app
+from wf.entrypoints.web.app import create_app
 from tests.test_board import clock, payload, sync, ticket
 
 
@@ -99,7 +99,7 @@ def test_the_event_stream_opens_and_sends_the_board(client):
                 break
 
 def test_a_card_that_changes_column_is_sent_as_a_move():
-    from wf.web.agents_views import board_events
+    from wf.entrypoints.web.agents_views import board_events
     prev = {"ABC-1": ("in_dev", "<article>a</article>")}
     now = {"ABC-1": ("pr_open", "<article>a</article>")}
     events = board_events(prev, {}, now, {})
@@ -108,7 +108,7 @@ def test_a_card_that_changes_column_is_sent_as_a_move():
 
 
 def test_board_events_send_only_what_changed():
-    from wf.web.agents_views import board_events
+    from wf.entrypoints.web.agents_views import board_events
     prev = {"ABC-1": ("in_dev", "<a>1</a>"), "ABC-2": ("in_dev", "<a>2</a>"), "ABC-3": ("qa", "<a>3</a>")}
     now = {"ABC-1": ("in_dev", "<a>1 changed</a>"), "ABC-2": ("in_dev", "<a>2</a>"), "ABC-4": ("qa", "<a>4</a>")}
     kinds = sorted((e["type"], e["key"]) for e in board_events(prev, {}, now, {}))

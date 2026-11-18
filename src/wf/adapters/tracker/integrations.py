@@ -22,7 +22,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Callable
 
-from wf.config import BoardLink, RepoLink
+from wf.application.ports.tracker import TrackerError
+from wf.domain.workspace.config import BoardLink, RepoLink
 
 
 @dataclass(frozen=True)
@@ -93,5 +94,5 @@ class JiraClient:
         return self._get(f"/rest/api/3/issue/{issue_key}?expand=changelog&fields=status,labels")
 
 
-class JiraError(RuntimeError):
+class JiraError(TrackerError):
     pass
