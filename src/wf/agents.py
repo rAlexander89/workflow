@@ -23,6 +23,10 @@ from pathlib import Path
 from typing import Callable
 
 from wf import board, claude_run
+from wf.adapters.persistence.sqlite.board_queries import SqliteBoardQueries
+from wf.adapters.persistence.sqlite.pause import SqlitePauseState
+from wf.adapters.workspace.git import GitWorkspace
+from wf.application.delivery.pipeline import PipelineService
 from wf.domain.delivery import roles
 from wf.domain.delivery.roles import (  # noqa: F401
     DONE_FOR_BLOCKING, MAX_REFINEMENT_ROUNDS, MAX_RUNS_PER_STAGE, PAUSABLE, REFINEMENT_STAGES, STAGE_ROLE,
@@ -262,6 +266,27 @@ def unmet_blockers(conn: sqlite3.Connection, key: str, stage_of: dict[str, str])
     return roles.unmet_blockers(board.blockers(conn, key), stage_of)
 
 
+class _Deploys:
+    """DeployObserver over a function, so callers can inject how a dev deploy is detected."""
+
+    def __init__(self, dev_deployed: Callable[[str], bool]):
+        self._dev_deployed = dev_deployed
+
+    def dev_deployed(self, key: str) -> bool:
+        return self._dev_deployed(key)
+
+
+def pipeline_service(conn: sqlite3.Connection, repo: Path | None = None,
+                     dev_deployed: Callable[[str], bool] | None = None) -> PipelineService:
+    """The pipeline use cases wired to this board connection and repo."""
+    from wf import observe
+
+    return PipelineService(
+        commands=board._commands(conn), queries=SqliteBoardQueries(conn), pause=SqlitePauseState(conn),
+        runs=SqliteAgentRuns(conn), workspace=GitWorkspace(repo or Path(".")),
+        deploys=_Deploys(dev_deployed or (lambda key: observe.dev_deployed(conn, key))))
+
+
 def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, dev_deployed=None) -> list[str]:
     """Move tickets along the steps that need no agent judgement. Returns the keys moved.
 
@@ -274,71 +299,12 @@ def advance_pipeline(conn: sqlite3.Connection, *, repo: Path, dev_deployed=None)
     Deploying to prod is a person's step; nothing here moves a ticket past regression.
     While work is paused, no ticket moves.
     """
-    from wf import observe, pause
-
-    if pause.is_paused(conn):
-        return []
-
-    # A sprint ticket goes into refinement (product and staff agree the work) before a dev takes it.
-    moved: list[str] = []
-    for key in board.sprint_backlog_keys(conn):
-        board.move_stage(conn, key, "in_refinement", "harness", "in the active sprint: refine it")
-        moved.append(key)
-
-    # A prerequisite sent back to dev pauses the work that depends on it.
-    for row in board.kicked_back_dependents(conn, PAUSABLE):
-        board.move_stage(conn, row["key"], "ready_for_dev", "harness",
-                         f"paused: prerequisite {row['blocker']} was sent back to dev")
-        moved.append(row["key"])
-
-    if dev_deployed is None:
-        dev_deployed = lambda key: observe.dev_deployed(conn, key)  # noqa: E731
-    ensure_schema(conn)
-    rows = board.keys_in_stages(conn, ("pr_open", "pr_in_review", "merged", "regression", "performance"))
-    for row in rows:
-        key, stage = row["key"], row["stage"]
-        if stage == "merged":
-            if dev_deployed(key):
-                board.move_stage(conn, key, "regression", "harness", "deployed to dev; regression on dev")
-                moved.append(key)
-            continue
-        if stage in ("regression", "performance"):
-            proc = subprocess.run(["git", "rev-parse", "--verify", "--quiet", branch_for(key)], cwd=repo,
-                                  capture_output=True, text=True)
-            if proc.returncode != 0:
-                continue
-            head = proc.stdout.strip()
-            if stage == "regression" and "qa" in board.approvals_since_stage(conn, key, head, "regression"):
-                if board.perf_requested(conn, key):
-                    board.move_stage(conn, key, "performance", "harness", "regression passed; performance requested")
-                else:
-                    board.move_stage(conn, key, "deployed", "harness", f"regression passed at {head[:8]}; deployed to dev")
-                moved.append(key)
-            elif stage == "performance" and "performance" in board.approvals_since_stage(conn, key, head, "performance"):
-                board.move_stage(conn, key, "deployed", "harness", f"performance passed at {head[:8]}")
-                moved.append(key)
-            continue
-        proc = subprocess.run(["git", "rev-parse", "--verify", "--quiet", branch_for(key)], cwd=repo,
-                              capture_output=True, text=True)
-        if proc.returncode != 0:
-            continue
-        head = proc.stdout.strip()
-        if stage in ("pr_open", "pr_in_review") and "pr_review" in board.approvals_at(conn, key, head):
-            board.move_stage(conn, key, "ready_for_perf_review", "harness", f"PR review approved at {head[:8]}")
-            moved.append(key)
-    return moved
+    return pipeline_service(conn, repo, dev_deployed).advance()
 
 
 def _finished_and_unchanged(conn: sqlite3.Connection, key: str, stage: str) -> bool:
-    """True when the last run in this stage succeeded and nothing has happened to the ticket since.
-
-    An event by anyone other than that run's own role counts as a change, so a review that sends the
-    ticket back to this stage makes the stage run again.
-    """
-    last = _runs(conn).last_run(key, stage)
-    if last is None or last["timed_out"] or last["exit_code"] != 0:
-        return False
-    return not board.changed_since(conn, key, last["started_at"], last["role"])
+    """True when the last run in this stage succeeded and nothing has happened to the ticket since."""
+    return pipeline_service(conn)._finished_and_unchanged(key, stage)
 
 
 def idle_reason(conn: sqlite3.Connection, key: str) -> dict | None:
@@ -347,38 +313,7 @@ def idle_reason(conn: sqlite3.Connection, key: str) -> dict | None:
     Returns {"why": text, "can_run": bool}. can_run means a person can start the stage's agent
     now with the Run again button. It is False when something else has to change first.
     """
-    from wf import pause
-
-    row = board.pipeline_row(conn, key)
-    if row is None or row["stage"] is None:
-        return None
-    stage = row["stage"]
-    flags = row["flags"]
-    role = refinement_role(conn, key) if stage in REFINEMENT_STAGES else STAGE_ROLE.get(stage)
-
-    if pause.is_paused(conn):
-        return {"why": "Work is paused. It resumes when you press Resume work.", "can_run": False}
-    if flags:
-        return {"why": f"Flagged: {', '.join(flags)}. Clear the flag first.", "can_run": False}
-    if role is None:
-        return None  # nothing is expected to happen here (backlog, done): no notice
-    if row["sprint_state"] != "active":
-        return {"why": "Not in an active sprint, so no agent picks it up.", "can_run": False}
-    if stage in REFINEMENT_STAGES:
-        rounds = _runs(conn).product_rounds(key)
-        if refinement_limit_reached(rounds):
-            return {"why": f"{rounds} refinement rounds without agreement. A person has to decide.", "can_run": True}
-    elif run_limit_reached(runs_at(conn, key, stage)):
-        return {"why": f"{MAX_RUNS_PER_STAGE} runs in a row failed here. A person has to look at the last run.",
-                "can_run": True}
-    elif stage == "ready_for_dev":
-        waiting = unmet_blockers(conn, key, board.stage_by_key(conn))
-        if waiting:
-            return {"why": f"Waiting for {', '.join(waiting)} to reach dev first.", "can_run": False}
-    elif stage not in REFINEMENT_STAGES and _finished_and_unchanged(conn, key, stage):
-        return {"why": f"The {role} agent finished its last run here and nothing has changed since. "
-                       "It won't run again until something changes or you run it.", "can_run": True}
-    return None
+    return pipeline_service(conn).idle_reason(key)
 
 
 def tick(
@@ -396,63 +331,21 @@ def tick(
     refinement gets at most MAX_REFINEMENT_ROUNDS product rounds before a person is asked.
     dry_run lists the work without running it. While work is paused, nothing is listed or run.
     """
-    from wf import pause
-
-    if pause.is_paused(conn):
-        return []
     ensure_schema(conn)
-    rows = board.pipeline_rows(conn)
-    stage_of = {r["key"]: r["stage"] for r in rows}
-    dev_busy = next((r["key"] for r in rows if r["stage"] == "in_dev" and r["sprint_state"] == "active"), None)
-    order = sorted(rows, key=lambda r: (r["stage"] != "in_dev", r["sort_order"] is None,
-                                        r["sort_order"] or 0, r["key"]))
     actions: list[dict] = []
-    for row in order:
-        key, stage = row["key"], row["stage"]
-        role = STAGE_ROLE.get(stage)
-        if stage in REFINEMENT_STAGES:
-            role = refinement_role(conn, key)  # refinement alternates; the round limit below ends it
-        if role is None or row["sprint_state"] != "active" or row["flags"]:
-            continue
-        if stage not in REFINEMENT_STAGES and _finished_and_unchanged(conn, key, stage):
-            continue  # the last run here succeeded and nothing has changed since: wait for a change
-        action = {"key": key, "stage": stage, "role": role, "skipped": None}
-        if stage in REFINEMENT_STAGES:
-            rounds = _runs(conn).product_rounds(key)
-            if refinement_limit_reached(rounds):
-                action["skipped"] = f"{rounds} refinement rounds without agreement; needs a human"
-                if not dry_run:
-                    board.set_flag(conn, key, "needs-human", "harness", action["skipped"], clock=clock)
-                actions.append(action)
-                continue
-        elif run_limit_reached(runs_at(conn, key, stage)):
-            action["skipped"] = "run limit reached for this stage; needs a human"
-            actions.append(action)
-            continue
-        if stage == "ready_for_dev":
-            if dev_busy is not None:
-                action["skipped"] = f"dev is busy with {dev_busy}"
-                actions.append(action)
-                continue
-            waiting = unmet_blockers(conn, key, stage_of)
-            if waiting:
-                action["skipped"] = f"waiting for {', '.join(waiting)} to merge to dev"
-                actions.append(action)
-                continue
-        if stage == "in_dev" and dev_busy != key:
-            action["skipped"] = f"dev is busy with {dev_busy}"
-            actions.append(action)
-            continue
-        if not dry_run:
-            if stage == "ready_for_dev":
-                board.move_stage(conn, key, "in_dev", "dev", "dev pickup")
+    for planned in pipeline_service(conn, repo).plan_pass():
+        action = planned.to_dict()
+        if planned.flag_needs_human:
+            if not dry_run:
+                board.set_flag(conn, planned.key, "needs-human", "harness", planned.skipped, clock=clock)
+        elif planned.skipped is None and not dry_run:
+            if planned.stage == "ready_for_dev":
+                board.move_stage(conn, planned.key, "in_dev", "dev", "dev pickup")
                 action["stage"] = "in_dev"
-            res = run_agent(conn, role, key, repo=repo, runs_dir=runs_dir, access=access,
-                            model=model, test_cmd=test_cmd, app_cmd=app_cmd, app_url=app_url, claude_bin=claude_bin, runner=runner, clock=clock,
-                            regression_url=regression_url,
+            res = run_agent(conn, planned.role, planned.key, repo=repo, runs_dir=runs_dir, access=access,
+                            model=model, test_cmd=test_cmd, app_cmd=app_cmd, app_url=app_url, claude_bin=claude_bin,
+                            runner=runner, clock=clock, regression_url=regression_url,
                             bot_domain=bot_domain, bot_credentials=bot_credentials)
             action["exit_code"] = res.run.exit_code if res.run else None
-        if stage == "ready_for_dev":
-            dev_busy = key  # the dev holds this ticket now; no other ready ticket starts this pass
         actions.append(action)
     return actions
