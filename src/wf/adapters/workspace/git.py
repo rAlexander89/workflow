@@ -17,9 +17,11 @@ def run_git(argv: list[str], cwd: Path) -> "subprocess.CompletedProcess[str]":
 
 
 class GitWorkspace:
-    def __init__(self, repo: Path, runs_dir: Path | None = None, runner: Runner = run_git):
+    def __init__(self, repo: Path, runs_dir: Path | None = None, runner: Runner = run_git,
+                 worktrees: Path | None = None):
         self._repo = Path(repo)
-        self._worktrees = None if runs_dir is None else Path(runs_dir) / "worktrees"
+        self._worktrees = Path(worktrees) if worktrees is not None else (
+            None if runs_dir is None else Path(runs_dir) / "worktrees")
         self._run = runner
 
     def _git(self, *args: str, cwd: Path | None = None) -> str:
@@ -32,6 +34,42 @@ class GitWorkspace:
         if self._worktrees is None:
             raise RuntimeError("this workspace has no runs directory, so it has no worktrees")
         return self._worktrees / key
+
+    def ensure_worktree(self, key: str) -> Path:
+        branch = branch_for(key)
+        worktrees = self._worktrees.resolve() if self._worktrees is not None else self._worktree(key)
+        path = worktrees / key
+        if path.exists():
+            return path
+        worktrees.mkdir(parents=True, exist_ok=True)
+        if self._git("branch", "--list", branch):
+            self._git("worktree", "add", str(path), branch)
+        else:
+            has_origin = run_git(["git", "rev-parse", "--verify", "--quiet", "origin/main"], self._repo).returncode == 0
+            base = "origin/main" if has_origin else "main"
+            self._git("worktree", "add", "-b", branch, str(path), base)
+        return path
+
+    def sync_with_main(self, key: str) -> None:
+        """Fetch GitHub's main and rebase the ticket's branch onto it. The rebase is undone if it conflicts."""
+        if run_git(["git", "remote", "get-url", "origin"], self._repo).returncode != 0:
+            return  # a repo with no hosted remote: its local main is the main
+        worktree = self._worktree(key)
+        fetch = run_git(["git", "fetch", "-q", "origin", "main"], self._repo)
+        if fetch.returncode != 0:
+            raise RuntimeError(f"could not fetch the latest main: {fetch.stderr.strip()[-200:]}")
+        rebase = run_git(["git", "rebase", "origin/main"], worktree)
+        if rebase.returncode != 0:
+            run_git(["git", "rebase", "--abort"], worktree)
+            raise RuntimeError("could not rebase onto the latest main; a person needs to resolve the conflict")
+
+    def diff_range(self, key: str) -> str:
+        proc = run_git(["git", "log", "main", "--merges", "--format=%H", "-1",
+                        f"--grep=^Merge {branch_for(key)} "], self._repo)
+        merge_commit = proc.stdout.strip()
+        if merge_commit:
+            return f"{merge_commit}^1..{merge_commit}"
+        return f"main...{branch_for(key)}"
 
     def branch_head(self, key: str) -> str | None:
         proc = self._run(["git", "rev-parse", "--verify", "--quiet", branch_for(key)], self._repo)

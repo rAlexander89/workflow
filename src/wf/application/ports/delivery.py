@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Protocol
 
 
@@ -10,6 +11,18 @@ class Workspace(Protocol):
 
     def branch_head(self, key: str) -> str | None:
         """The commit the ticket's branch points at, or None if the branch does not exist."""
+        ...
+
+    def ensure_worktree(self, key: str) -> Path:
+        """The ticket's worktree on its branch, created from the internal main if needed."""
+        ...
+
+    def sync_with_main(self, key: str) -> None:
+        """Start from the latest main. Raises RuntimeError, leaving the branch unchanged, if that fails."""
+        ...
+
+    def diff_range(self, key: str) -> str:
+        """What to diff for a ticket: its changes as merged into main, or its branch against main."""
         ...
 
     def worktree_exists(self, key: str) -> bool: ...

@@ -22,8 +22,10 @@ LEGACY_FILE = Path(__file__).with_name("architecture_legacy.json")
 LAYERS = ("domain", "application", "adapters", "entrypoints")
 
 # Libraries that do I/O. The domain and application layers must not import them.
-IO_MODULES = {"sqlite3", "subprocess", "socket", "http", "urllib", "httpx", "requests", "fastapi", "starlette",
+IO_MODULES = {"sqlite3", "subprocess", "socket", "http", "httpx", "requests", "fastapi", "starlette",
               "uvicorn", "jinja2", "langgraph", "shutil", "tempfile", "asyncio"}
+# urllib.parse only splits strings, so it is allowed; the rest of urllib does network I/O.
+IO_SUBMODULES = {"urllib.request", "urllib.error", "urllib.response"}
 # Attribute uses that read the clock or the environment.
 IMPURE_ATTRS = {("time", "time"), ("time", "monotonic"), ("time", "sleep"), ("os", "environ"), ("os", "getenv"),
                 ("datetime", "now"), ("datetime", "utcnow")}
@@ -65,7 +67,7 @@ def violations(layer: str, source: str) -> list[str]:
     pure = layer in ("domain", "application")
     for name in _imports(tree):
         top = name.split(".")[0]
-        if pure and top in IO_MODULES:
+        if pure and (top in IO_MODULES or any(name == m or name.startswith(m + ".") for m in IO_SUBMODULES)):
             found.append(f"imports the I/O library {name}")
         if top == "wf":
             allowed = ALLOWED_WF[layer]
@@ -94,6 +96,8 @@ def _layer_of(path: Path) -> str | None:
 
 def test_a_domain_module_may_not_import_io_or_adapters():
     assert violations("domain", "import sqlite3\n")
+    assert violations("domain", "import urllib.request\n")
+    assert not violations("domain", "from urllib.parse import urlsplit\n")
     assert violations("domain", "import subprocess as sp\n")
     assert violations("domain", "from wf.adapters import sqlite\n")
     assert violations("domain", "from wf import board\n")
