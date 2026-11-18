@@ -127,3 +127,25 @@ def test_a_flagged_ticket_shows_its_flag_and_the_reason_on_the_page(tmp_path):
     page = TestClient(create_app(config_path=cfg, db_path=db, webhook_token="t")).get("/agents")
     assert page.status_code == 200
     assert "needs-human" in page.text and "the acceptance criteria are unclear" in page.text
+
+
+def test_the_pr_card_is_a_template_and_escapes_what_it_shows(client):
+    from wf.entrypoints.web import app as web_app  # noqa: F401
+    r = client.get("/board/ticket/ABC-1/pr-card")
+    assert r.status_code == 200 and "No repo linked." in r.text
+    assert client.get("/board/ticket/NOPE-1/pr-card").status_code == 404
+
+
+def test_the_pr_card_template_shows_the_verdict_and_escapes_reasons():
+    from types import SimpleNamespace
+    from wf.entrypoints.web.agents_views import templates
+    ctx = dict(empty="", key="K-1", branch="agent/K-1", head="a" * 40, pr="https://h/p/1", summary="2 files changed",
+               approved="qa", last_run="ok", merged=False,
+               verdict=SimpleNamespace(ok=False, reasons=["checks <b>failed</b>"]))
+    html = templates.get_template("_pr_card.html").render(**ctx)
+    assert "Merge bot: not good to merge" in html and "checks &lt;b&gt;failed&lt;/b&gt;" in html
+    assert 'href="https://h/p/1"' in html and "agent/K-1" in html
+    good = templates.get_template("_pr_card.html").render(**{**ctx, "verdict": SimpleNamespace(ok=True, reasons=[])})
+    assert "good to merge" in good and "not good" not in good
+    done = templates.get_template("_pr_card.html").render(**{**ctx, "merged": True})
+    assert "Merged to GitHub main" in done

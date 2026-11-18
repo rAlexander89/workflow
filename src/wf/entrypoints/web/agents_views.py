@@ -7,7 +7,6 @@ calls on the use cases the composition root hands them, so the UI and the CLI ca
 
 from __future__ import annotations
 
-import html as _html
 import json
 import os
 import threading
@@ -368,39 +367,30 @@ def mount_agents(app: FastAPI, container: Container) -> None:
     def pr_card(request: Request, key: str):
         """The internal pull request for a ticket: its branch, head commit, approvals, and diff."""
         settings = container.settings()
+
+        def card(**ctx) -> HTMLResponse:
+            return templates.TemplateResponse(request, "_pr_card.html", ctx)
+
         with container.session() as s:
             if s.tickets.get(key) is None:
                 return HTMLResponse("", status_code=404)
-            branch = branch_for(key)
             if not settings.repos:
-                return HTMLResponse('<div class="muted">No repo linked.</div>')
+                return card(empty="No repo linked.")
             workspace = s.workspace(settings)
             head = workspace.branch_head(key)
             if head is None:
-                return HTMLResponse('<div class="muted">No branch yet. The dev run creates it.</div>')
+                return card(empty="No branch yet. The dev run creates it.")
             stat = workspace.diff_stat(key)
             pr = s.tickets.last_note(key, "pr")
             approvals = sorted(s.tickets.approvals_at(key, head))
             tests = s.agent_runs.last_exit_code(key, "dev")
-            verdict = s.merge_bot(settings).assess(key)
-            merged = bool(pr) and s.merge_bot(settings).is_merged(pr)
-        summary = _html.escape(stat[-1]) if stat else "no changes against main"
-        if merged:
-            verdict_html = '<div class="item"><b class="ok">Merged to GitHub main</b></div>'
-        else:
-            verdict_html = ('<div class="item"><b class="ok">Merge bot: good to merge</b></div>' if verdict.ok else
-                            '<div class="item"><b class="bad">Merge bot: not good to merge</b><ul>'
-                            + "".join(f"<li>{_html.escape(r)}</li>" for r in verdict.reasons) + "</ul></div>")
-        approved = ", ".join(approvals) if approvals else "none at this commit"
-        body = f"""<div class="panel"><div class="row between"><b>{_html.escape(branch)}</b>
-<span class="muted">{head[:10]}</span></div>
-<div class="item">Changes: {summary}</div>
-{verdict_html}
-<div class="item">Approved at this commit: {_html.escape(approved)}</div>
-<div class="item">Last dev run: {"ok" if tests == 0 else "not ok" if tests is not None else "none"}</div>
-<div class="item"><a href="/board/ticket/{_html.escape(key)}/diff" target="_blank">View the diff</a></div>
-{('<div class="item">GitHub PR: <a href="' + _html.escape(pr) + '" target="_blank">' + _html.escape(pr) + '</a></div>') if pr else ''}</div>"""
-        return HTMLResponse(body)
+            bot = s.merge_bot(settings)
+            return card(
+                empty="", key=key, branch=branch_for(key), head=head, pr=pr,
+                summary=stat[-1] if stat else "no changes against main",
+                approved=", ".join(approvals) if approvals else "none at this commit",
+                last_run="ok" if tests == 0 else "not ok" if tests is not None else "none",
+                merged=bool(pr) and bot.is_merged(pr), verdict=bot.assess(key))
 
     @app.get("/board/ticket/{key}/diff", response_class=PlainTextResponse)
     def diff(key: str):
